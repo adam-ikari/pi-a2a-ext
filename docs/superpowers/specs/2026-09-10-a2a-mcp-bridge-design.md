@@ -10,7 +10,7 @@
 
 - 宿主 omp 进程内加载本扩展，起一个 Streamable HTTP MCP 服务器。
 - 远程 omp 通过 `mcp.json` 的 `type: http` 连入，`tools/list` 看到宿主全部工具，`tools/call` 由宿主会话执行。
-- 写/exec 类工具触发宿主 TUI 实时审批弹窗；用户 Approve/Deny，结果原路返回远程。
+- 写/exec 类工具按宿主 `tools.approval` 策略执行：策略为 `prompt` 时触发宿主 TUI 实时审批弹窗；用户 Approve/Deny，结果原路返回远程。宿主默认 `yolo` 即直通（与本地调用语义一致）。
 
 v1 不做：resources/prompts 暴露、server-to-client 进度通知（SSE）、调用取消、多会话路由（固定 `Main`）、OAuth（仅静态 Bearer token）。
 
@@ -162,8 +162,7 @@ async function callTool(name, args, extCtx) {
 | HTTP | body 非 JSON-RPC / 超限 | 400 + JSON-RPC error |
 | JSON-RPC | 未知 method | -32601 |
 | MCP | 工具不存在 / 被 deny / 会话不可用 | result.isError=true + 文本 |
-| MCP | 审批 deny（宿主拒绝）/ 审批超时 / 执行抛错 | result.isError=true + 错误文本 |
-
+| MCP | 审批 deny（宿主拒绝）/ 执行抛错 | result.isError=true + 错误文本 |
 桥自身不实现 approve/deny 路径（§4.3 宿主门接管），错误文本原样透传（含 wrapper 的 `"Tool call denied by user: ..."`）。
 
 ## 6. 安全边界
@@ -184,9 +183,9 @@ async function callTool(name, args, extCtx) {
 
 `test/smoke.mts`（无头、确定性、不碰用户配置——env `A2A_BRIDGE_CONFIG` 指向临时文件）：
 
-1. 临时 HOME + 临时配置，直接 import 扩展模块并以假 `pi: ExtensionAPI` 桩驱动 `session_start`，让 `startServer` 起来；读 `config.ts` 拿 URL/token。
+1. 真实 E2E：临时 `HOME`（`.omp/settings.json` 指向本扩展）+ env `A2A_BRIDGE_CONFIG` 指向临时配置文件；起宿主 `omp --mode rpc`（保持会话存活，stdin 喂最小 prompt）一次性进程加载本扩展；从临时配置文件读取 URL/token。桥在宿主进程内跑，`tools/call` 落在真实 `Main` 会话——无 fake stub。
 2. 裸 `fetch` 当 MCP 客户端：`initialize`（断言 protocolVersion/会话头）→ `notifications/initialized`(202) → `tools/list`（断言含 `read`、不含 deny 项）→ `tools/call read <tmpfile>`（断言 text 匹配）→ `tools/call` 未知名（断言 isError）→ 401（无 token）→ `-32601`（未知 method）。
-3. 审批策略：`tools.approval: {write: prompt}` 且 `hasUI=false` → 断言 isError 含 fail-closed 文本；`approvalMode: yolo` → 直通。
+3. 审批策略：宿主 settings `tools.approval: {write: prompt}` + `--mode rpc`（无 TUI）→ 断言 `tools/call write` 返回 isError 含 fail-closed 文本；默认 `yolo` → `read` 直通。
 4. TUI 弹窗路径为**人工验证**（README 步骤）：宿主 TUI + `bash: prompt` 策略 + 远程 `tools/call bash` → Approve 执行 / Deny 返回拒绝。
 
 ## 9. 实现顺序
