@@ -25,10 +25,10 @@ Q3 原结论「stdio 优先」。实施研究推翻：stdio 服务器必须独�
 | 宿主 omp 18.1.16；扩展面 `@oh-my-pi/pi-coding-agent`，兼容别名 `@earendil-works/*` / `@mariozechner/*` 由 loader shim 解析 | 全局安装源码 `extensibility/plugins/legacy-pi-compat.ts`；superpowers 插件即 `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"` |
 | 宿主 MCP 客户端协议版本 `2025-11-25`，`Accept: application/json, text/event-stream`，纯 JSON 响应即满足；GET 长连接可选（405/非 2xx → 客户端静默忽略）；notification 接受 200/202 | `src/mcp/types.ts:168`、`src/mcp/transports/http.ts` |
 | `pi.getAllTools()` 返回 `ToolInfo[]`：`{name, description, parameters, promptGuidelines?, sourceInfo}`，含核心+扩展+MCP 工具 | `extensibility/extensions/types.ts:700-706` |
-| `AgentRegistry.global().get("Main").session` → `AgentSession`（公开 `settings`/`sessionManager`/`modelRegistry`/`model`）；`getToolByName(name)` 返回注册表工具（`session-tools.ts:410`） | `src/registry/agent-registry.ts` |
+| `AgentRegistry.global().get("Main").session` → `AgentSession`（公开 `settings`/`sessionManager`/`modelRegistry`/`model`）；`getToolByName(name)` 返回注册表工具（`src/session/session-tools.ts:408`） | `src/registry/agent-registry.ts` |
 | `AgentToolContext`（`pi-agent-core` 经声明合并）= `CustomToolContext` 必备 `{sessionManager, modelRegistry, model, isIdle(), hasQueuedMessages(), abort()}` + 可选 `{settings, autoApprove, fetch, localProtocolOptions, ui?, hasUI?, toolCall?}` | `extensibility/custom-tools/types.ts:85-106`、`tools/context.ts:5-19` |
 | 扩展 `ExtensionContext` 公开 `isIdle()/hasPendingMessages()/abort()/ui/hasUI/localProtocolOptions/modelRegistry` → 与 `session.*` 拼接即可构造完整 ctx | `extensibility/extensions/runner.ts:1160-1207` |
-| `pi-ai` 的 `toolWireSchema(tool)` / `arkToWireSchema(schema)` 把 ArkType/TypeBox/JSON Schema 统一转 JSON Schema 2020-12 | `@oh-my-pi/pi-ai/src/utils/schema/wire.ts:585-609` |
+| `pi-ai` 的 `toolWireSchema(tool)` / `arkToWireSchema(schema)` 把 ArkType/TypeBox/JSON Schema 统一转 JSON Schema 2020-12；导入走子路径 `@oh-my-pi/pi-ai/utils/schema`（根入口不导出） | `@oh-my-pi/pi-ai/src/utils/schema/wire.ts:585-609`、`src/utils/schema/index.ts:14` |
 | MCP SDK **未安装**；裸 Bun.serve 手写 JSON-RPC 即可满足已验证的协议面 | 全盘 find 无果 |
 
 ## 3. 架构
@@ -120,10 +120,10 @@ async function callTool(name, args, extCtx) {
 }
 ```
 
-- **审批复用宿主门**：注册表工具即 `ExtensionToolWrapper`；ctx 携带真实 `settings`（`session.settings`，与宿主同源）+ 扩展 `ui`，则：
-  - `approvalMode: yolo`（默认）→ 直通；
-  - 策略 `prompt` → wrapper 内部 `ui.select` 弹宿主 TUI，用户按键后继续——**桥不写任何审批逻辑**；
-  - 宿主无 TUI（print/rpc 模式）→ wrapper fail-closed 抛错，返回 `isError`。
+- **审批复用宿主门**：注册表工具即 `ExtensionToolWrapper`。审批门读 ctx 的 `settings`（`session.settings`，与宿主同源）/`autoApprove` 决定 `approvalMode` 与逐工具策略；弹窗与 fail-closed 走 wrapper 构造时绑定的 `this.runner`（`wrapper.ts:309` `runner.hasUI()`、`:333` `runner.getUIContext().select()`），**不读 ctx.ui/hasUI**——桥无需也无法注入审批 UI，机制：
+  - `approvalMode: yolo` → 直通；
+  - 策略 `prompt` → runner 的宿主 TUI 弹 Approve/Deny，用户按键后继续——**桥不写任何审批逻辑**；
+  - 宿主无交互 UI（print/rpc 模式）→ wrapper fail-closed 抛错（含 yolo 提示文本），返回 `isError`。
 - 取消：v1 `signal` 传 `undefined`（wrapper 对 `signal: undefined` 安全）。
 - 结果映射：`content[]` 的 `text` → `{type:"text",text}`；`image` → `{type:"image",data,mimeType}`；未知块转 text。`isError` 透传为 MCP result 的 `isError`。
 - 并发：多次 `tools/call` 并行时无共享状态；审批弹窗由宿主 UI 队列天然串行化。

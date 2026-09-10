@@ -16,15 +16,12 @@
 |---|---|
 | 扩展自动发现：`~/.omp/agent/extensions/*.ts` 直接加载（herdr 即此机制） | 实测目录 |
 | `import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent"`；根导出 `AgentRegistry`/`MAIN_AGENT_ID`/`ToolInfo`/`ExtensionContext` | `src/index.ts:23-25,40`、`src/sdk.ts:712` |
-| `AgentRegistry.global().get("Main")` → `{session: AgentSession \| null}`；所有模式（TUI/rpc/print）的顶层会话都以 `Main` 注册 | `src/registry/agent-registry.ts:72-87`、`src/sdk.ts:1745,3321` |
-| `AgentSession` 公开 `settings`/`sessionManager`/`modelRegistry`/`model`；`getToolByName(name)` 返回注册表工具（即 `ExtensionToolWrapper`，内建审批门） | `agent-session.ts:532-534,1981,4977,5218`、`sdk.ts:2922` |
-| `AgentToolContext` 必备 `{sessionManager, modelRegistry, model, isIdle(), hasQueuedMessages(), abort()}` + 可选 `{settings, autoApprove, fetch, localProtocolOptions, ui?, hasUI?, toolCall?}`；全部可从 `session.*` + 扩展 `ctx` 拼装 | `custom-tools/types.ts:85-106`、`tools/context.ts:5-19` |
-| wrapper 审批读 `context.settings`/`context.autoApprove`；prompt 时经 `this.runner.getUIContext().select`（宿主 TUI）；无 UI fail-closed 抛错 | `wrapper.ts:196-347` |
-| 宿主 MCP 客户端：协议 `2025-11-25`，`Accept: application/json, text/event-stream`，纯 JSON 响应 OK；GET SSE 405 容忍；notification 200/202 OK；tools/list do-while 分页遇无 `nextCursor` 即止 | `mcp/types.ts:168`、`mcp/transports/http.ts`、`mcp/client.ts:233-244` |
-| schema：`pi-ai` 的 `toolWireSchema(tool)` 把 ArkType/TypeBox/JSON Schema 统一转 JSON Schema 2020-12；ToolInfo.parameters 即 `TSchema` | `@oh-my-pi/pi-ai/src/utils/schema/wire.ts:585-609` |
+| `AgentRegistry.global().get("Main")` → `{session: AgentSession \| null}`；所有模式（TUI/rpc/print）的顶层会话都以 `Main` 注册，且注册先于 `session_start` 派发（`attachSession` 后触发） | `src/registry/agent-registry.ts:72-87`、`src/sdk.ts:1745,3321` |
+| `AgentSession` 公开 `settings`/`sessionManager`/`modelRegistry`/`model`（`src/session/agent-session.ts:532-534,1981,4977,5218`）；`getToolByName(name)` 返回注册表工具（即 `ExtensionToolWrapper`，内建审批门；`src/session/session-tools.ts:408`） | `src/session/*.ts` |
+| wrapper 审批门读 `context.settings`/`context.autoApprove`（`extensibility/extensions/wrapper.ts:196-197`）；**弹窗/fail-closed 走 `this.runner.hasUI()` + `this.runner.getUIContext().select()`（wrapper.ts:309,325,333）——不读 ctx.ui/hasUI**；runner 在构造时绑定宿主会话，桥无需也无法注入审批 UI | `extensibility/extensions/wrapper.ts` |
+| 宿主 MCP 客户端：协议 `2025-11-25`，`Accept: application/json, text/event-stream`，纯 JSON 响应 OK；GET SSE 405 容忍；notification 200/202 OK；tools/list do-while 分页遇无 `nextCursor` 即止 | `src/mcp/types.ts:168`、`src/mcp/transports/http.ts`、`src/mcp/client.ts:233-244` |
+| schema：`pi-ai` 的 `toolWireSchema(tool)` 在 **`@oh-my-pi/pi-ai/utils/schema`**（根入口不导出，`src/utils/schema/index.ts:14` re-export `./wire`） | `@oh-my-pi/pi-ai/src/utils/schema/wire.ts:585-609` |
 | `crypto.randomUUID()` / `crypto.getRandomValues(32)` base64url / `timingSafeEqual` 均可用 | node:crypto |
-| 配置基目录：`getAgentDir()`（`@oh-my-pi/pi-utils` 根导出）→ `~/.omp/agent/` | `src/index.ts:10` |
-
 ## 任务
 
 ### T1 — 脚手架：包清单 + 目录结构
@@ -95,11 +92,11 @@
 
 - **Files**：`src/bridge.ts`（消费 T4 的 `McpTool`/`McpContent` 契约）
 - **Change**
-  1. `import { AgentRegistry, type ExtensionContext } from "@oh-my-pi/pi-coding-agent"`；`import { toolWireSchema } from "@oh-my-pi/pi-ai"`（若该子路径导入在宿主 Bun 下解析失败，fallback：`ToolInfo.parameters` 直接作 inputSchema——`toolWireSchema` 只是把 ArkType schema 规范化，多数工具 parameters 已是 JSON Schema 形态；实现里 try/catch 包裹，失败走 fallback 并 `console.warn` 一次）。
+  1. `import { AgentRegistry, type ExtensionContext } from "@oh-my-pi/pi-coding-agent"`；`import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema"`（**根入口不导出**，必须走该子路径；`src/utils/schema/index.ts:14` re-export `./wire`。仍用 try/catch 包调用：schema 转换失败→fallback 直接用 `ToolInfo.parameters` 作 inputSchema 并 warn 一次）。
   2. `export function buildToolCatalog(pi: ExtensionAPI, cfg: BridgeConfig): () => Promise<McpTool[]>`：
      - 闭包内 `Map<string, McpTool>` 缓存；每次调用：`pi.getAllTools()` → 过滤 `isDenied(cfg, t.name)` → 每项 `{name, description: t.description ?? "", inputSchema: toInputSchema(t.parameters)}`（缓存按 name；重扫时新名字才转换）→ 返回数组。
      - `toInputSchema(parameters)`：`try { return toolWireSchema({parameters}) as Record<string,unknown> } catch { return parameters as Record<string,unknown> ?? {type:"object"} }`。
-  3. `export function buildCallTool(pi: ExtensionAPI): (name: string, args: unknown) => Promise<{content: McpContent[]; isError: boolean}>`：
+  3. `export function buildCallTool(pi: ExtensionAPI, extCtx: ExtensionContext): (name: string, args: unknown) => Promise<{content: McpContent[]; isError: boolean}>`：
      - 校验 `isDenied` → `{content:[{type:"text",text:\`tool '${name}' is not exposed by this bridge\`}],isError:true}`（T4 侧也过滤，双保险）。
      - `const ref = AgentRegistry.global().get("Main")`；`!ref?.session` → error "main session not available"。
      - `const tool = ref.session.getToolByName(name)`；`!tool` → error `unknown tool '${name}'`。
@@ -118,7 +115,7 @@
          localProtocolOptions: extCtx.localProtocolOptions,
        };
        ```
-       （`extCtx` 来自 `session_start` 事件回调的第二个参数；`ctx` 标注 `AgentToolContext` 类型，字段如不匹配用断言，因为宿主类型经声明合并。）
+       （`extCtx` 即第二参数，`session_start` 回调传入并闭包捕获；`ctx` 字段如与声明合并后的 `AgentToolContext` 不匹配用断言。注意：ctx 里的 `ui`/`hasUI` 只是信息性字段——wrapper 的审批弹窗/fail-closed 走 `this.runner`（wrapper.ts:309,325,333），不读这两个字段；真正影响审批的是 `settings`。）
      - `const r = await tool.execute(crypto.randomUUID(), args as any, undefined, undefined, ctx)`。
      - 映射：`toMcpContent(r.content)`：text→`{type:"text",text}`；image→`{type:"image",data:块.data, mimeType:块.mimeType}`；其它→`{type:"text",text:JSON.stringify(块)}`。`isError: !!r.isError`。
      - `catch(e)` → `{content:[{type:"text",text:e.message}],isError:true}`（审批 deny、无 UI fail-closed、执行异常全覆盖）。

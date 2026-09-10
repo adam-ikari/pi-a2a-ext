@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-10T09:16:34"
+updated: "2026-09-10T09:56:50"
 ---
 
 <!-- compiled_truth -->
@@ -47,4 +47,10 @@ Static Bearer token, 32 random bytes base64url, generated on first start, persis
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: spec docs/superpowers/specs/2026-09-10-a2a-mcp-bridge-design.md
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-10T09:56:50
+  kind: decision
+  summary: "spec approved; implementation plan written to docs/superpowers/plans/2026-09-10-a2a-mcp-bridge.md (T1-T9, zero-dep Bun.serve JSON-RPC, execution via AgentRegistry Main session)"
+  source: plan commit 72bc255
   affects: [a2a-mcp-bridge]
