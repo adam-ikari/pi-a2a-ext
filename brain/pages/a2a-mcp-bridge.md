@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-10T09:56:50"
+updated: "2026-09-10T16:42:33"
 ---
 
 <!-- compiled_truth -->
@@ -53,4 +53,10 @@ Static Bearer token, 32 random bytes base64url, generated on first start, persis
   kind: decision
   summary: "spec approved; implementation plan written to docs/superpowers/plans/2026-09-10-a2a-mcp-bridge.md (T1-T9, zero-dep Bun.serve JSON-RPC, execution via AgentRegistry Main session)"
   source: plan commit 72bc255
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-10T16:42:33
+  kind: evidence
+  summary: "implementation complete: T1-T9 done; tsc 0 errors; server_stub 15 assertions; real-host smoke SMOKE OK (omp 18.1.16, 21 tools, tools/call read on real Main session)"
+  source: implementation session
   affects: [a2a-mcp-bridge]
