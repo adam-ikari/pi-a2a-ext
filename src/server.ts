@@ -80,13 +80,17 @@ export async function startServer(
 			const id = rpc.id;
 
 			// Session check: tolerate a missing header (client notifications may
-			// fire before a session id exists); 404 only for an unknown id.
+			// fire before a session id exists); 404 only for an unknown or idle-
+			// expired id. A hit is refreshed so TTL tracks *idle* time, not
+			// wall-clock age; an expired entry is deleted as a lazy cleanup.
 			const sid = req.headers.get("mcp-session-id");
 			if (rpc.method !== "initialize" && sid !== null) {
 				const ts = sessions.get(sid);
 				if (ts === undefined || Date.now() - ts > SESSION_TTL_MS) {
+					if (ts !== undefined) sessions.delete(sid);
 					return json(404, { jsonrpc: "2.0", id: id ?? null, error: { code: -32000, message: "unknown session" } });
 				}
+				sessions.set(sid, Date.now());
 			}
 
 			// Notifications: no id, no result.
