@@ -41,7 +41,7 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 ## 配置
 
-配置文件 `~/.omp/agent/a2a-bridge.json`，首次启动自动生成，权限 `0600`：
+配置文件 `~/.omp/agent/a2a-bridge.json`，首次启动自动生成，权限 `0600`（创建时即 0600，无权限窗口）：
 
 ```json
 { "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "deny": [], "denyMCPTools": false }
@@ -55,7 +55,11 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 | `deny` | 不暴露的工具名列表 |
 | `denyMCPTools` | `true` 时排除所有 `mcp__` 前缀工具 |
 
-环境变量 `A2A_BRIDGE_CONFIG` 可覆盖配置文件路径。
+环境变量 `A2A_BRIDGE_CONFIG` 可覆盖配置文件路径；`A2A_BRIDGE_AUDIT` 可覆盖审计日志路径。
+
+校验是 **fail-closed** 的：字段类型非法（`port` 非整数/越界、`deny` 非字符串数组、`denyMCPTools` 非布尔、`host` 非非空字符串）时扩展拒绝启动并报错，不会带着错误的暴露面继续跑。唯一的例外是 `token`：缺失或非法时自动生成并**写回配置**，保证跨重启稳定。
+
+配置文件的其他改动（如 `deny`）在**下次重启宿主**后生效；运行中只想换 token 用 `/a2a rotate`（立即生效，旧 token 即刻作废）。
 
 ### 命令
 
@@ -104,7 +108,11 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 - token 即信任凭证：拿到 token 就能触发该工具的宿主审批流程。配置文件保持 `0600`，不要进版本库。
 - 默认仅回环监听；真要对外暴露，防火墙自己负责。
-- 暴露的工具是宿主当前会话的全集（含 `mcp__` 嵌套工具），需要收紧就用 `deny` / `denyMCPTools`。
+- **暴露语义 = 会话工具注册表全集**：`tools/list` 直接来自 `pi.getAllTools()`（即 Main 会话注册表），因此包含 `hidden` 工具、也包含宿主模型当前被禁用的工具——这不是「宿主模型当前可见集合」的镜像。需要收紧就用 `deny` / `denyMCPTools`。
+- **调用与列表同源**：`tools/call` 只接受出现在 `tools/list` 中的名字（deny 过滤之后），别名（如 `xd://bash`）和未列出的名字一律拒绝，且拒绝时不区分「被 deny」与「不存在」（不泄露名字是否存在）。deny 判定在 list 与 call 两侧各做一次。
+- **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
+- **审计日志**：每次远程 `tools/call` 追加一行 JSONL（时间、工具名、参数摘要截断 1KB、isError）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。日志写失败不影响调用。
+- 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
 v1 边界：
 
@@ -112,23 +120,27 @@ v1 边界：
 - 无 SSE 推送，无调用取消。
 - 固定路由到宿主 `Main` 会话。
 - 静态 Bearer token，无 OAuth。
+- 无并发/速率限制。
 
 ## 开发
 
 ```sh
 bun install
 
-bun x tsc -p tsconfig.json   # 类型检查
-bun test/server_stub.ts      # 协议冒烟（stub 化 BridgeDeps，验 JSON-RPC 行为）
-bun test/smoke.ts            # 真实 E2E
+bun run typecheck    # 类型检查
+bun test             # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计）
+bun run test:smoke   # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，手动跑）
 ```
+
+依赖说明：`@oh-my-pi/pi-coding-agent` 与 `@oh-my-pi/pi-ai` 以**精确版本**固定在 `devDependencies`，与宿主 omp 版本保持一致，仅用于类型检查与单测。**运行时不要从 `node_modules` 加载它们**——宿主 omp 的 `omp:legacy-pi-shim` 会把这些 import 重定向到宿主内嵌的同一份模块，`AgentRegistry.global()` 这类模块级单例才能共享；升级 omp 时同步改这两个版本号。
 
 文件布局：
 
 | 路径 | 职责 |
 | --- | --- |
 | `extensions/a2a-bridge.ts` | 扩展入口，`session_start` 起服务器，注册 `/a2a` |
-| `src/server.ts` | `Bun.serve` + JSON-RPC（MCP 2025-11-25，纯 JSON 响应） |
-| `src/bridge.ts` | 工具目录与执行（`pi.getAllTools` / `AgentRegistry` Main 会话） |
-| `src/config.ts` | 配置加载/保存、token 生成、deny 判定 |
+| `src/server.ts` | `Bun.serve` + JSON-RPC（MCP 2025-11-25，纯 JSON 响应）、会话与版本协商 |
+| `src/bridge.ts` | 工具目录与执行（`pi.getAllTools` / AgentRegistry Main 会话）、暴露交集判定 |
+| `src/config.ts` | 配置加载/保存、字段校验、token 生成、deny 判定 |
 | `src/auth.ts` | Bearer token 校验（timing-safe 比较） |
+| `src/audit.ts` | 远程调用审计日志（JSONL，轮转） |
