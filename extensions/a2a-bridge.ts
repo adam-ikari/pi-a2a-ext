@@ -5,7 +5,7 @@ import { configPath, generateToken, loadConfig, saveConfig } from "../src/config
 import type { BridgeConfig } from "../src/config.ts";
 import { startServer } from "../src/server.ts";
 
-let server: { port: number; stop(): void } | null = null;
+let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;
 
 export default function a2aBridge(pi: ExtensionAPI): void {
@@ -16,16 +16,27 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 			if (!existsSync(configPath())) await saveConfig(cfg);
 			server = await startServer(cfg, {
 				getTools: buildToolCatalog(pi, cfg),
-				callTool: buildCallTool(ctx, cfg),
+				callTool: buildCallTool(pi, ctx, cfg),
 				serverInfo: () => ({ name: "omp-a2a-bridge", version: "0.1.0" }),
 			});
 			const url = `http://${cfg.host}:${server.port}/`;
+			if (server.fellBack) {
+				ctx.ui.notify(
+					`A2A bridge: configured port ${cfg.port} is busy — bound ${server.port} instead; update remote mcp.json`,
+					"warning",
+				);
+			}
 			const tokenBrief = cfg.token.slice(0, 6);
 			ctx.ui.notify(`A2A bridge listening on ${url} (token ${tokenBrief}…)`);
 			if (cfg.host === "0.0.0.0") {
 				ctx.ui.notify("A2A bridge bound to 0.0.0.0 — ensure firewall restricts access", "warning");
 			}
 		} catch (e) {
+			// Leave no half-initialized state: a failed start must not let
+			// `/a2a rotate` report success for a server that never bound.
+			server?.stop();
+			server = null;
+			cfg = null;
 			ctx.ui.notify(`A2A bridge failed to start: ${(e as Error)?.message ?? String(e)}`, "error");
 		}
 	});
@@ -41,7 +52,7 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
-					if (!cfg) {
+					if (!server || !cfg) {
 						ctx.ui.notify("A2A bridge not running", "error");
 						return;
 					}
