@@ -19,15 +19,19 @@ export interface BridgeDeps {
 		args: unknown,
 	): Promise<{ content: McpContent[]; isError: boolean }>;
 	serverInfo(): { name: string; version: string };
+	/** Clock override for tests (session TTL / eviction). Defaults to Date.now. */
+	now?(): number;
 }
 
 const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 1 day idle expiry
+export const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 1 day idle expiry
+/** Upper bound on tracked sessions; the least-recently-seen entry is evicted first. */
+export const MAX_SESSIONS = 64;
 
 interface JsonRpcRequest {
-	jsonrpc?: string;
+	jsonrpc?: unknown;
 	id?: unknown;
-	method?: string;
+	method?: unknown;
 	params?: {
 		protocolVersion?: string;
 		name?: string;
@@ -45,23 +49,40 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 export async function startServer(
 	cfg: BridgeConfig,
 	deps: BridgeDeps,
-): Promise<{ port: number; stop(): void }> {
+): Promise<{ port: number; fellBack: boolean; stop(): void }> {
 	// mcp-session-id -> last-seen timestamp. Dynamic membership + per-entry
 	// timestamps, hence Map.
 	const sessions = new Map<string, number>();
+	const now: () => number = deps.now ?? Date.now;
+
+	/** Evict the least-recently-seen session so the map stays bounded. */
+	function evictOldest(): void {
+		let oldestSid: string | null = null;
+		let oldestTs = Infinity;
+		for (const [k, t] of sessions) {
+			if (t < oldestTs) {
+				oldestTs = t;
+				oldestSid = k;
+			}
+		}
+		if (oldestSid !== null) sessions.delete(oldestSid);
+	}
 
 	async function handler(req: Request): Promise<Response> {
 		try {
 			if (req.method === "GET") return new Response(null, { status: 405 });
+			if (req.method !== "POST" && req.method !== "DELETE") return new Response(null, { status: 405 });
+
+			// Auth precedes every state-touching branch: an unauthenticated
+			// DELETE must not be able to terminate another client's session.
+			if (!authorize({ token: cfg.token }, req.headers)) {
+				return json(401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "unauthorized" } });
+			}
+
 			if (req.method === "DELETE") {
 				const sid = req.headers.get("mcp-session-id");
 				if (sid) sessions.delete(sid);
 				return new Response(null, { status: 204 });
-			}
-			if (req.method !== "POST") return new Response(null, { status: 405 });
-
-			if (!authorize({ token: cfg.token }, req.headers)) {
-				return json(401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "unauthorized" } });
 			}
 
 			let msg: unknown;
@@ -74,23 +95,34 @@ export async function startServer(
 				return json(400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
 			}
 			const rpc = msg as JsonRpcRequest;
-			if (typeof rpc !== "object" || rpc === null || typeof rpc.method !== "string") {
+			if (
+				typeof rpc !== "object" ||
+				rpc === null ||
+				rpc.jsonrpc !== "2.0" ||
+				typeof rpc.method !== "string"
+			) {
 				return json(400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
 			}
-			const id = rpc.id;
+			// Normalize: JSON.stringify drops an undefined id, which would yield a
+			// response violating JSON-RPC's "id must be present" rule.
+			const id = rpc.id ?? null;
 
-			// Session check: tolerate a missing header (client notifications may
-			// fire before a session id exists); 404 only for an unknown or idle-
-			// expired id. A hit is refreshed so TTL tracks *idle* time, not
-			// wall-clock age; an expired entry is deleted as a lazy cleanup.
+			// Session enforcement covers every post-initialize message — requests
+			// *and* notifications. Omitting the header is not an escape hatch
+			// (400, matching the official SDK transport); omp's own client always
+			// sends it. A hit refreshes the timestamp so the TTL tracks *idle*
+			// time; an unknown or idle-expired id gets 404 plus lazy cleanup.
 			const sid = req.headers.get("mcp-session-id");
-			if (rpc.method !== "initialize" && sid !== null) {
-				const ts = sessions.get(sid);
-				if (ts === undefined || Date.now() - ts > SESSION_TTL_MS) {
-					if (ts !== undefined) sessions.delete(sid);
-					return json(404, { jsonrpc: "2.0", id: id ?? null, error: { code: -32000, message: "unknown session" } });
+			if (rpc.method !== "initialize") {
+				if (sid === null) {
+					return json(400, { jsonrpc: "2.0", id, error: { code: -32000, message: "missing mcp-session-id" } });
 				}
-				sessions.set(sid, Date.now());
+				const ts = sessions.get(sid);
+				if (ts === undefined || now() - ts > SESSION_TTL_MS) {
+					if (ts !== undefined) sessions.delete(sid);
+					return json(404, { jsonrpc: "2.0", id, error: { code: -32000, message: "unknown session" } });
+				}
+				sessions.set(sid, now());
 			}
 
 			// Notifications: no id, no result.
@@ -101,14 +133,20 @@ export async function startServer(
 			switch (rpc.method) {
 				case "initialize": {
 					const newSid = randomUUID();
-					sessions.set(newSid, Date.now());
+					// Abandoned clients never come back to be purged, so bound the
+					// map: evict least-recently-seen before inserting.
+					if (sessions.size >= MAX_SESSIONS) evictOldest();
+					sessions.set(newSid, now());
 					return json(
 						200,
 						{
 							jsonrpc: "2.0",
 							id,
 							result: {
-								protocolVersion: rpc.params?.protocolVersion ?? DEFAULT_PROTOCOL_VERSION,
+								// Version negotiation: we speak exactly one version, so
+								// always answer with ours — echoing the client's requested
+								// version would "accept" anything (e.g. "1999-01-01").
+								protocolVersion: DEFAULT_PROTOCOL_VERSION,
 								capabilities: { tools: {} },
 								serverInfo: deps.serverInfo(),
 							},
@@ -162,12 +200,15 @@ export async function startServer(
 	}
 
 	let server: Awaited<ReturnType<typeof serve>>;
+	let fellBack = false;
 	try {
 		server = await serve(cfg.port);
 	} catch (e) {
-		// EADDRINUSE on an explicit port: retry once on an ephemeral port.
+		// EADDRINUSE on an explicit port: retry once on an ephemeral port, and
+		// flag it so the caller can warn (remote mcp.json pins the old port).
 		if (cfg.port !== 0 && (e as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
 			server = await serve(0);
+			fellBack = true;
 		} else {
 			throw e;
 		}
@@ -175,6 +216,7 @@ export async function startServer(
 
 	return {
 		port: server.port ?? cfg.port,
+		fellBack,
 		stop() {
 			server.stop(true);
 		},
