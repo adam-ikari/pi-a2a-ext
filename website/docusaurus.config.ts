@@ -1,10 +1,19 @@
 import type { Config } from "@docusaurus/types";
 
+// GitHub Pages deployment: Actions sets GITHUB_REPOSITORY="owner/repo".
+// Derive url/baseUrl so one config serves both local preview
+// (http://localhost:3000, baseUrl "/") and the published project site
+// (https://owner.github.io/repo/, baseUrl "/repo/"). User-site repos
+// (owner.github.io) get baseUrl "/".
+const [owner, repo] = (process.env.GITHUB_REPOSITORY ?? "").split("/");
+const onGitHubPages = Boolean(process.env.GITHUB_ACTIONS && owner && repo);
+const isUserSite = repo === `${owner}.github.io`;
+
 const config: Config = {
 	title: "omp A2A Bridge",
 	tagline: "把运行中的 omp 变成一个 Streamable HTTP MCP 服务器",
-	url: "http://localhost:3000",
-	baseUrl: "/",
+	url: onGitHubPages ? `https://${owner}.github.io` : "http://localhost:3000",
+	baseUrl: onGitHubPages ? (isUserSite ? "/" : `/${repo}/`) : "/",
 	onBrokenLinks: "throw",
 	// .md files are plain CommonMark: repo docs contain literal {braces} and
 	// <angle-brackets> that must not be treated as JSX/JS expressions.

@@ -116,6 +116,8 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 请求/响应格式、处理顺序、会话生命周期与错误码总表的完整 wire 契约见 [docs/protocol.md](docs/protocol.md)。
 
+在线文档站（GitHub Pages，push 自动发布）：<https://adam-ikari.github.io/pi-a2a-ext/>
+
 v1 边界：
 
 - 只暴露工具（`tools/list` + `tools/call`），无 resources、无 prompts。
