@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-24T03:42:16"
+updated: "2026-09-24T06:11:00"
 ---
 
 <!-- compiled_truth -->
@@ -145,4 +145,10 @@ Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — m
   kind: evidence
   summary: "verification: tsc 0, bun test 59/59, biome lint clean, SMOKE OK, HARDEN OK 29/29 (incl. sid attribution), approval probe VERDICT B exit 0; 5 commits e7393eb..5b2342f"
   source: verification runs 2026-09-24
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-24T06:11:00
+  kind: decision
+  summary: "Documentation set completed: docs/protocol.md is the authoritative wire contract (processing order, session lifecycle, error-code table), docs/testing.md owns probe verdict semantics (VERDICT A/B/C) and the 29-check breakdown, CHANGELOG.md uses date sections without tags; README gained a troubleshooting section and doc links, all inserted below the approval section so its README:103/105 references stay valid"
+  source: documentation round 2026-09-24
   affects: [a2a-mcp-bridge]
