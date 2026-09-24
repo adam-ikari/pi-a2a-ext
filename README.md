@@ -146,3 +146,7 @@ bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp
 | `src/config.ts` | 配置加载/保存、字段校验、token 生成、deny 判定 |
 | `src/auth.ts` | Bearer token 校验（timing-safe 比较） |
 | `src/audit.ts` | 远程调用审计日志（JSONL 两阶段 `start`/`done`，轮转） |
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
