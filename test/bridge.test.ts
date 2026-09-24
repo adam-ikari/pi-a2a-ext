@@ -54,7 +54,7 @@ afterAll(async () => {
 	await rm(auditDir, { recursive: true, force: true });
 });
 
-/** auditCall is fire-and-forget; poll until the async flush lands. */
+/** auditStart/auditDone are fire-and-forget; poll until the async flush lands. */
 async function readLines(file: string): Promise<Array<Record<string, unknown>>> {
 	const deadline = Date.now() + 3000;
 	let lines: Array<Record<string, unknown>> = [];
@@ -123,27 +123,50 @@ describe("buildCallTool exposure gate", () => {
 });
 
 describe("audit log", () => {
-	test("records tool, outcome, and args as JSONL", async () => {
+	/** Poll the log until some record matches; undefined at deadline. */
+	async function untilRecord(
+		pred: (l: Record<string, unknown>) => boolean,
+	): Promise<Record<string, unknown> | undefined> {
+		const deadline = Date.now() + 3000;
+		while (Date.now() < deadline) {
+			const hit = (await readLines(auditLogPath())).find(pred);
+			if (hit) return hit;
+			await Bun.sleep(10);
+		}
+		return undefined;
+	}
+
+	test("phase:start at dispatch + phase:done on completion, paired by id", async () => {
 		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
 		await call("read", { path: "/etc/hostname" });
+
+		// Match by content, not position: earlier tests append to this same
+		// file, and flush order across fire-and-forget writes is not a contract.
+		const start = await untilRecord(l => l.phase === "start" && String(l.args ?? "").includes("/etc/hostname"));
+		expect(start).toBeDefined();
+		expect(start).toMatchObject({ tool: "read" });
+		expect(typeof start?.id).toBe("string");
+		expect(typeof start?.ts).toBe("string");
+
+		const done = await untilRecord(l => l.phase === "done" && l.id === start?.id);
+		expect(done).toBeDefined();
+		expect(done).toMatchObject({ tool: "read", isError: true });
+		expect(String(done?.args ?? "")).toContain("/etc/hostname");
+		// dispatch precedes completion (ts captured synchronously at each call)
+		expect(String(done?.ts) >= String(start?.ts)).toBe(true);
+	});
+
+	test("rejected calls are audited with both phases", async () => {
+		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
 		await call("guessed_tool", {});
 
-		// Flush order between the two fire-and-forget appends is not guaranteed,
-		// and the exposure-gate tests above have already written to this file —
-		// so match by content instead of by position or total line count.
-		const deadline = Date.now() + 3000;
-		let readRec: Record<string, unknown> | undefined;
-		let probeRec: Record<string, unknown> | undefined;
-		while (Date.now() < deadline && (!readRec || !probeRec)) {
-			for (const l of await readLines(auditLogPath())) {
-				if (String(l.args ?? "").includes("/etc/hostname")) readRec = l;
-				if (l.tool === "guessed_tool") probeRec = l;
-			}
-			if (!readRec || !probeRec) await Bun.sleep(10);
-		}
+		const start = await untilRecord(l => l.phase === "start" && l.tool === "guessed_tool");
+		expect(start).toBeDefined();
+		expect(typeof start?.id).toBe("string");
 
-		expect(readRec).toMatchObject({ tool: "read", isError: true });
-		expect(typeof readRec?.ts).toBe("string");
-		expect(probeRec).toMatchObject({ tool: "guessed_tool", isError: true });
+		const done = await untilRecord(l => l.phase === "done" && l.tool === "guessed_tool");
+		expect(done).toBeDefined();
+		expect(done).toMatchObject({ isError: true });
+		expect(done?.id).toBe(start?.id);
 	});
 });

@@ -1,7 +1,7 @@
 import { AgentRegistry, MAIN_AGENT_ID, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { randomUUID } from "node:crypto";
-import { auditCall } from "./audit.ts";
+import { auditDone, auditStart } from "./audit.ts";
 import { isDenied } from "./config.ts";
 import type { BridgeConfig } from "./config.ts";
 import type { McpContent, McpTool } from "./server.ts";
@@ -103,13 +103,17 @@ export function buildCallTool(
 	};
 
 	return async (name, args) => {
+		// Dispatch-time record: if the call never settles (host approval
+		// waiting for a UI that does not exist), the start line is the trace.
+		const id = randomUUID();
+		auditStart(id, name, args);
 		let r: { content: McpContent[]; isError: boolean };
 		try {
 			r = await run(name, args);
 		} catch (e) {
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
-		auditCall(name, args, r.isError);
+		auditDone(id, name, args, r.isError);
 		return r;
 	};
 }
