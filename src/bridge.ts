@@ -1,15 +1,23 @@
 import { AgentRegistry, MAIN_AGENT_ID, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import { randomUUID } from "node:crypto";
 import { auditDone, auditStart } from "./audit.ts";
 import { isDenied } from "./config.ts";
 import type { BridgeConfig } from "./config.ts";
 import type { McpContent, McpTool } from "./server.ts";
 
+// Loads pi-coding-agent's AgentToolContext augmentation (CustomToolContext
+// fields + ui/hasUI) so the execute() context literal is fully type-checked
+// instead of relying on the all-optional base declaration.
+import type {} from "@oh-my-pi/pi-coding-agent/tools/context";
+
 /** Convert a ToolInfo schema to JSON Schema; fall back to raw parameters. */
-function toInputSchema(parameters: unknown): Record<string, unknown> {
+function toInputSchema(parameters: TSchema): Record<string, unknown> {
 	try {
-		return toolWireSchema({ parameters } as never) as Record<string, unknown>;
+		// toolWireSchema reads only `.parameters`; name/description are unused
+		// filler because the pi-ai Tool type requires them.
+		return toolWireSchema({ name: "", description: "", parameters });
 	} catch {
 		return (parameters ?? { type: "object" }) as Record<string, unknown>;
 	}
@@ -27,7 +35,7 @@ export function buildToolCatalog(pi: ExtensionAPI, cfg: BridgeConfig): () => Pro
 		const out: McpTool[] = [];
 		for (const t of pi.getAllTools()) {
 			if (isDenied(cfg, t.name)) continue;
-			const params: unknown = t.parameters;
+			const params = t.parameters;
 			const key = typeof params === "object" && params !== null ? params : null;
 			let inputSchema = key ? schemaCache.get(key) : undefined;
 			if (inputSchema === undefined) {
@@ -81,14 +89,14 @@ export function buildCallTool(
 			model: session.model,
 			settings: session.settings,
 			isIdle: extCtx.isIdle,
-			hasQueuedMessages: extCtx.hasPendingMessages,
 			abort: extCtx.abort,
+			hasQueuedMessages: extCtx.hasPendingMessages,
 			ui: extCtx.ui,
 			hasUI: extCtx.hasUI,
 			localProtocolOptions: extCtx.localProtocolOptions,
 		};
 		try {
-			const r = await tool.execute(randomUUID(), args as never, undefined, undefined, ctx as never);
+			const r = await tool.execute(randomUUID(), args, undefined, undefined, ctx);
 			const content = (r.content ?? []).map(b =>
 				b?.type === "text"
 					? { type: "text" as const, text: b.text }
