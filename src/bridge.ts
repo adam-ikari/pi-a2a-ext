@@ -65,7 +65,7 @@ export function buildCallTool(
 	pi: ExtensionAPI,
 	extCtx: ExtensionContext,
 	cfg: BridgeConfig,
-): (name: string, args: unknown) => Promise<{ content: McpContent[]; isError: boolean }> {
+): (name: string, args: unknown, sid?: string | null) => Promise<{ content: McpContent[]; isError: boolean }> {
 	const run = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
 		// One message for "denied" and "not in catalog": a caller holding the
 		// token learns nothing about which names exist behind the curtain.
@@ -110,18 +110,18 @@ export function buildCallTool(
 		}
 	};
 
-	return async (name, args) => {
+	return async (name, args, sid) => {
 		// Dispatch-time record: if the call never settles (host approval
 		// waiting for a UI that does not exist), the start line is the trace.
 		const id = randomUUID();
-		auditStart(id, name, args);
+		auditStart(id, sid ?? null, name, args);
 		let r: { content: McpContent[]; isError: boolean };
 		try {
 			r = await run(name, args);
 		} catch (e) {
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
-		auditDone(id, name, args, r.isError);
+		auditDone(id, sid ?? null, name, args, r.isError);
 		return r;
 	};
 }

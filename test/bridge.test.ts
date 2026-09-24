@@ -138,19 +138,19 @@ describe("audit log", () => {
 
 	test("phase:start at dispatch + phase:done on completion, paired by id", async () => {
 		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
-		await call("read", { path: "/etc/hostname" });
+		await call("read", { path: "/etc/hostname" }, "sess-1");
 
 		// Match by content, not position: earlier tests append to this same
 		// file, and flush order across fire-and-forget writes is not a contract.
 		const start = await untilRecord(l => l.phase === "start" && String(l.args ?? "").includes("/etc/hostname"));
 		expect(start).toBeDefined();
-		expect(start).toMatchObject({ tool: "read" });
+		expect(start).toMatchObject({ tool: "read", sid: "sess-1" });
 		expect(typeof start?.id).toBe("string");
 		expect(typeof start?.ts).toBe("string");
 
 		const done = await untilRecord(l => l.phase === "done" && l.id === start?.id);
 		expect(done).toBeDefined();
-		expect(done).toMatchObject({ tool: "read", isError: true });
+		expect(done).toMatchObject({ tool: "read", isError: true, sid: "sess-1" });
 		expect(String(done?.args ?? "")).toContain("/etc/hostname");
 		// dispatch precedes completion (ts captured synchronously at each call)
 		expect(String(done?.ts) >= String(start?.ts)).toBe(true);

@@ -201,10 +201,10 @@ try {
 	}, "audit done record for read");
 	check(audit.includes('"phase":"start","tool":"read"'), "audit start record for read");
 	check(audit.includes('"phase":"start","tool":"bash"'), "audit start record for denied bash probe");
-	const recs: Array<{ id?: string; phase?: string }> = [];
+	const recs: Array<{ id?: string; phase?: string; sid?: string; tool?: string }> = [];
 	for (const l of audit.trim().split("\n")) {
 		try {
-			recs.push(JSON.parse(l) as { id?: string; phase?: string });
+			recs.push(JSON.parse(l) as { id?: string; phase?: string; sid?: string; tool?: string });
 		} catch {
 			// partial trailing line
 		}
@@ -213,6 +213,10 @@ try {
 	check(
 		recs.filter(r => r.phase === "done").every(r => startIds.has(r.id)),
 		"every done record pairs with a start record",
+	);
+	check(
+		recs.some(r => r.phase === "done" && r.tool === "read" && r.sid === sid1),
+		"audit records carry the session id (attribution)",
 	);
 	check((statSync(auditPath).mode & 0o777) === 0o600, "audit log is 0600");
 

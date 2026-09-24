@@ -111,7 +111,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 - **暴露语义 = 会话工具注册表全集**：`tools/list` 直接来自 `pi.getAllTools()`（即 Main 会话注册表），因此包含 `hidden` 工具、也包含宿主模型当前被禁用的工具——这不是「宿主模型当前可见集合」的镜像。需要收紧就用 `deny` / `denyMCPTools`。
 - **调用与列表同源**：`tools/call` 只接受出现在 `tools/list` 中的名字（deny 过滤之后），别名（如 `xd://bash`）和未列出的名字一律拒绝，且拒绝时不区分「被 deny」与「不存在」（不泄露名字是否存在）。deny 判定在 list 与 call 两侧各做一次。
 - **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
-- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,phase:"start",tool,args}`，完成时 `{ts,id,phase:"done",tool,isError,args}`（同 `id` 配对，参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。**只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）；轮转恰逢中途时，配对的两条可能分处 `.1` 与当前文件。日志写失败不影响调用。
+- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。**只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）；轮转恰逢中途时，配对的两条可能分处 `.1` 与当前文件。日志写失败不影响调用。
 - 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
 v1 边界：

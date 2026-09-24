@@ -17,6 +17,7 @@ export interface BridgeDeps {
 	callTool(
 		name: string,
 		args: unknown,
+		sid: string | null,
 	): Promise<{ content: McpContent[]; isError: boolean }>;
 	serverInfo(): { name: string; version: string };
 	/** Clock override for tests (session TTL / eviction). Defaults to Date.now. */
@@ -164,7 +165,7 @@ export async function startServer(
 					const name = rpc.params?.name ?? "";
 					const args = rpc.params?.arguments;
 					try {
-						const r = await deps.callTool(name, args);
+						const r = await deps.callTool(name, args, sid);
 						return json(200, { jsonrpc: "2.0", id, result: { content: r.content, isError: r.isError } });
 					} catch (e) {
 						// Tool rejection must not become an HTTP error.

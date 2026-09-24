@@ -38,23 +38,37 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
  * - `auditDone` fires once the call settles and carries the outcome
  *   (`isError`).
  *
- * Both lines carry the args summary so each is self-contained for grep; the
- * `id` is there for pairing, not for lookups. Fire-and-forget: auditing must
- * never fail or delay the call itself, and a log past MAX_LOG_BYTES rotates
- * to `<path>.1` instead of growing forever (a rotation between the two lines
- * of one call may split the pair across `.1` and the current file — when it
- * matters, pair by `id` across both).
+ * Both lines carry the args summary (self-contained for grep) and the
+ * Mcp-Session-Id (`sid`, so a shared token's calls are attributable to a
+ * client session); `id` is there for pairing, not for lookups.
+ * Fire-and-forget: auditing must never fail or delay the call itself, and a
+ * log past MAX_LOG_BYTES rotates to `<path>.1` instead of growing forever
+ * (a rotation between the two lines of one call may split the pair across
+ * `.1` and the current file — when it matters, pair by `id` across both).
  */
-export function auditStart(id: string, tool: string, args: unknown, env?: NodeJS.ProcessEnv): void {
+export function auditStart(
+	id: string,
+	sid: string | null,
+	tool: string,
+	args: unknown,
+	env?: NodeJS.ProcessEnv,
+): void {
 	appendLine(
-		`${JSON.stringify({ ts: new Date().toISOString(), id, phase: "start", tool, args: serializeArgs(args) })}\n`,
+		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "start", tool, args: serializeArgs(args) })}\n`,
 		env,
 	);
 }
 
-export function auditDone(id: string, tool: string, args: unknown, isError: boolean, env?: NodeJS.ProcessEnv): void {
+export function auditDone(
+	id: string,
+	sid: string | null,
+	tool: string,
+	args: unknown,
+	isError: boolean,
+	env?: NodeJS.ProcessEnv,
+): void {
 	appendLine(
-		`${JSON.stringify({ ts: new Date().toISOString(), id, phase: "done", tool, isError, args: serializeArgs(args) })}\n`,
+		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "done", tool, isError, args: serializeArgs(args) })}\n`,
 		env,
 	);
 }
