@@ -114,6 +114,8 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 - **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。**只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）；轮转恰逢中途时，配对的两条可能分处 `.1` 与当前文件。日志写失败不影响调用。
 - 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
+请求/响应格式、处理顺序、会话生命周期与错误码总表的完整 wire 契约见 [docs/protocol.md](docs/protocol.md)。
+
 v1 边界：
 
 - 只暴露工具（`tools/list` + `tools/call`），无 resources、无 prompts。
@@ -121,6 +123,16 @@ v1 边界：
 - 固定路由到宿主 `Main` 会话。
 - 静态 Bearer token，无 OAuth。
 - 无并发/速率限制。
+
+## 故障排查
+
+- **401 `unauthorized`**：token 不匹配。远程 `mcp.json` 的 `Authorization` 头必须与配置 `token` 一致；`/a2a rotate` 之后要同步改远程侧。
+- **400 `missing mcp-session-id` / 404 `unknown session`**：除 `initialize` 外都要带会话头。会话是宿主进程内存态——宿主重启即全部失效、空闲超 24h 也回收；重新 `initialize` 拿新会话即可（正规 MCP 客户端库会自动处理）。
+- **连不上 / 端口对不上**：宿主启动时配置端口被占用会回退到随机端口并在通知栏告警——以通知栏或 `/a2a` 显示的实际端口更新 `mcp.json`。
+- **调用一直没有返回**：宿主无交互 UI 且该工具审批为 `prompt`（见「审批」）——命令不会执行但也不返回；调用方必须自设超时，审计日志里该调用只有 `start` 没有 `done`（见「安全与边界」的审计日志条目）。
+- **500 `internal error`**：服务端内部故障；响应体固定不含细节（防泄露），真实原因在宿主 stderr，形如 `[a2a-bridge] internal error: …`。
+- **改了配置不生效**：外部编辑 `a2a-bridge.json`（如 `deny`、`port`）需重启宿主；运行中只有 `/a2a rotate` 即时生效。
+- **`bun test` 版本守卫失败**（开发）：`@oh-my-pi/pi-*` 实装与 pin/lock 失同步——`bun install` 恢复；`omp --version` 与 pin 不一致只告警，升级宿主时同步改 `package.json` 里的两个精确版本号。
 
 ## 开发
 
@@ -135,6 +147,8 @@ bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手
 bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
 ```
 
+各测试的覆盖面、真实宿主探针的前置条件与判读标准（含审批探针 VERDICT A/B/C 语义）见 [docs/testing.md](docs/testing.md)。
+
 依赖说明：`@oh-my-pi/pi-coding-agent` 与 `@oh-my-pi/pi-ai` 以**精确版本**固定在 `devDependencies`，与宿主 omp 版本保持一致，仅用于类型检查与单测。**运行时不要从 `node_modules` 加载它们**——宿主 omp 的 `omp:legacy-pi-shim` 会把这些 import 重定向到宿主内嵌的同一份模块，`AgentRegistry.global()` 这类模块级单例才能共享；升级 omp 时同步改这两个版本号；`bun test` 内置**版本守卫**：实装 devDep ≠ pin 直接失败，`omp --version` ≠ pin 时告警。
 
 文件布局：
@@ -147,6 +161,8 @@ bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp
 | `src/config.ts` | 配置加载/保存、字段校验、token 生成、deny 判定 |
 | `src/auth.ts` | Bearer token 校验（timing-safe 比较） |
 | `src/audit.ts` | 远程调用审计日志（JSONL 两阶段 `start`/`done`，轮转） |
+
+变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可
 

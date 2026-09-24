@@ -1,0 +1,141 @@
+# 协议参考
+
+omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子集，所有响应为纯 JSON（无 SSE 流）。权威实现是 [`src/server.ts`](../src/server.ts)；本文与代码冲突时以代码为准。使用侧背景（安装、配置、威胁模型）见 [README](../README.md)。
+
+## 传输
+
+| 项 | 行为 |
+| --- | --- |
+| 端点 | 服务器不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`） |
+| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 1MB |
+| GET | `405` 空响应体（不实现 SSE 端点与流式推送） |
+| DELETE | 结束会话，见「会话生命周期」 |
+| 其他方法（PUT 等） | `405` |
+| 响应头 | 一律 `Content-Type: application/json`；`initialize` 额外返回 `mcp-session-id` |
+| CORS | 不发送（回环工具，非浏览器场景） |
+
+### 请求处理顺序
+
+错误按以下顺序**先到先判**（例如「未鉴权 + 缺会话头」返回 401 而非 400）：
+
+1. HTTP 方法（非 POST/DELETE → 405）
+2. 鉴权（→ 401）
+3. body 解析（→ 400 parse error）
+4. JSON-RPC 形状校验（→ 400 invalid request）
+5. 会话强制，仅对非 `initialize` 消息（→ 400 / 404）
+6. `notifications/*` 前缀 → `202` 空响应体
+7. 方法分发（未知方法 → `-32601`）
+8. 兜底异常 → 500（细节只进宿主 stderr）
+
+## 鉴权
+
+每个请求（含 `initialize` 与 `DELETE`）在任何状态变更之前校验：
+
+- 头：`Authorization: Bearer <token>`，scheme 大小写不敏感（`/^Bearer\s+(.+)$/i`）。
+- 比较为常数时间（先比字节长度）；失败返回 `401`，响应体 `{ "jsonrpc": "2.0", "id": null, "error": { "code": -32000, "message": "unauthorized" } }`。
+- 不返回 `WWW-Authenticate` 头。token 来源与轮换见 README「配置」「命令」。
+
+## 会话生命周期
+
+1. `POST initialize`（**不需要**会话头）→ `200`，响应头 `mcp-session-id: <uuid>`。**每次** initialize 都签发一个新会话。
+2. 此后的**所有**请求与通知都必须携带 `mcp-session-id: <uuid>`。
+3. 每次命中刷新 24 小时空闲计时（TTL 跟踪的是空闲时间）；上限 64 个会话，满时在新 `initialize` 处淘汰最久未见者。
+4. 主动结束：已鉴权的 `DELETE` → `204`，幂等（未知或缺失会话头同样 `204`，只是不删任何东西）。
+5. 会话是宿主**进程内存态**：宿主重启即全部失效；过期与不存在的会话统一返回 `404 unknown session`。
+
+## 方法
+
+### `initialize`
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-11-25" } }
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2025-11-25",
+    "capabilities": { "tools": {} },
+    "serverInfo": { "name": "omp-a2a-bridge", "version": "0.1.0" }
+  }
+}
+```
+
+- `protocolVersion` **恒为** `2025-11-25`：服务器只说一个版本，不回显请求值（请求 `1999-01-01` 也得到 `2025-11-25`）。
+- `params` 其余内容被忽略。
+- 响应头 `mcp-session-id` 即新会话 id。
+
+### `ping`
+
+→ `200 { "jsonrpc": "2.0", "id": <id>, "result": {} }`。用于存活探测（挂起调用之后服务器仍应答 ping）。
+
+### `tools/list`
+
+→ `200 { "result": { "tools": [ { "name", "description", "inputSchema" } ] } }`
+
+- **无 `nextCursor`**：单页返回全量（宿主 omp 客户端的分页循环在缺省游标时正常终止）。
+- `inputSchema` 为 JSON Schema 2020-12（由宿主工具的 typebox schema 经 `toolWireSchema` 导出）。
+- 内容 = 宿主会话工具注册表全集减 `deny`（含 `hidden` 工具；`denyMCPTools: true` 时排除 `mcp__` 前缀）。语义详见 README「安全与边界」。
+- 请求可带 `params.cursor`，被忽略。
+
+### `tools/call`
+
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "read", "arguments": { "path": "/etc/hostname" } } }
+```
+
+三种出口：
+
+1. **成功 / 工具内部拒绝**：一律 `200`，`result = { "content": [...], "isError": <bool> }`。工具抛错（审批 deny、参数校验失败等）进 `isError`，**不**变成 HTTP 错误。`content` 元素为 `{ "type": "text", "text" }` 或 `{ "type": "image", "data", "mimeType" }`。
+2. **未暴露**（被 `deny` 或不在目录中，含别名如 `xd://bash`）：`200` + `isError: true`，text 含 `not exposed`。被 deny 与不存在**共用同一文案**，不泄露名字是否存在。
+3. **审批挂起**（宿主无交互 UI 且工具为 `prompt` 档）：**没有响应**——请求会一直挂起（实测 ≥90s）。调用方必须自设超时；审计日志留 `start` 无 `done`。详见 README「审批」。
+
+补充：
+
+- `arguments` 原样透传给宿主工具执行（在宿主 `Main` 会话上下文中）。
+- 每次 `tools/call`（包括被拒绝的）都写一对审计记录，见 README「审计日志」。
+- `params.name` 缺失按空串处理（走向出口 2）。
+
+### `notifications/*`
+
+方法名以 `notifications/` 开头（如 `notifications/initialized`）→ `202` 空响应体。仍需通过会话强制（缺头 400 / 未知 404）。
+
+### 未知方法
+
+→ **HTTP 200** + `{ "error": { "code": -32601, "message": "method not found" } }`（注意是 200，不是 404）。
+
+### 无 id 消息
+
+严格 JSON-RPC 中无 `id` 即通知、不应有响应；本服务器只认 `notifications/` 前缀——其他无 id 消息会得到 `id: null` 的响应。客户端应按规范用 `notifications/` 发通知。
+
+## 错误码总表
+
+| HTTP | JSON-RPC `code` | `message` | 触发条件 |
+| --- | --- | --- | --- |
+| 401 | -32000 | `unauthorized` | 缺失/错误的 Bearer token |
+| 400 | -32700 | `parse error` | body 不是合法 JSON |
+| 400 | -32600 | `invalid request` | batch 数组、`jsonrpc` ≠ `"2.0"`、`method` 非字符串、非对象 body |
+| 400 | -32000 | `missing mcp-session-id` | 非 `initialize` 消息未带会话头（请求与通知同样处理） |
+| 404 | -32000 | `unknown session` | 会话不存在或空闲超 24h（过期条目顺带清理） |
+| 405 | — | （空体） | GET 或非 POST/DELETE 方法 |
+| 500 | -32603 | `internal error` | 服务器内部异常；**响应体固定为该文案**，细节只打到宿主 stderr（`[a2a-bridge] internal error:`） |
+| 200 | -32601 | `method not found` | 未实现的方法 |
+| 200 | （result） | `isError: true` | 工具侧拒绝 / 未暴露（text 含 `not exposed`） |
+
+所有错误响应体形如 `{ "jsonrpc": "2.0", "id": <id 或 null>, "error": { "code", "message" } }`。
+
+## 客户端接入时序
+
+1. `POST initialize` → 记下响应头 `mcp-session-id`。
+2. （可选）`POST notifications/initialized` → 202。
+3. `POST tools/list` / `POST tools/call`，都带 `Authorization` 与 `mcp-session-id` 两个头。
+4. **每次调用设置超时**（审批挂起时唯一能解开客户端的手段；用审计日志判定挂起）。
+5. 退出时 `DELETE`（可选，释放会话槽位）。
+
+与宿主 omp 自带 MCP 客户端实测兼容（协议 `2025-11-25`、纯 JSON 响应、initialize 后自动附带会话头）。远端跨机场景用 SSH 转发，见 README「跨机转发」。
+
+## v1 未实现面
+
+resources、prompts、SSE 推送、调用取消、并发/速率限制、OAuth/TLS——完整边界见 README「v1 边界」。
