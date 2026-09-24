@@ -46,13 +46,7 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
  * (a rotation between the two lines of one call may split the pair across
  * `.1` and the current file — when it matters, pair by `id` across both).
  */
-export function auditStart(
-	id: string,
-	sid: string | null,
-	tool: string,
-	args: unknown,
-	env?: NodeJS.ProcessEnv,
-): void {
+export function auditStart(id: string, sid: string | null, tool: string, args: unknown, env?: NodeJS.ProcessEnv): void {
 	appendLine(
 		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "start", tool, args: serializeArgs(args) })}\n`,
 		env,

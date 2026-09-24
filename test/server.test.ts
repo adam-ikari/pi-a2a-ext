@@ -4,8 +4,8 @@
  * negotiation, and session-map bounds. Real-host behavior is test/smoke.ts.
  */
 import { describe, expect, test } from "bun:test";
-import { MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
 import type { BridgeDeps } from "../src/server.ts";
+import { MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
 
 const JSON_HDR = { "content-type": "application/json" };
 const TOKEN = "test-token";
@@ -18,7 +18,11 @@ function makeDeps(): BridgeDeps {
 	return {
 		async getTools() {
 			return [
-				{ name: "read", description: "Read a file", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
+				{
+					name: "read",
+					description: "Read a file",
+					inputSchema: { type: "object", properties: { path: { type: "string" } } },
+				},
 				{ name: "echo", description: "Echo args back", inputSchema: { type: "object" } },
 				{ name: "boom", description: "Always throws", inputSchema: { type: "object" } },
 			];
@@ -50,10 +54,7 @@ async function init(base: string, params: Record<string, unknown> = {}): Promise
 
 /** Run `fn` against a fresh server so session-map tests cannot cross-contaminate. */
 async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
-	const s = await startServer(
-		{ port: 0, host: "127.0.0.1", token: TOKEN, deny: [], denyMCPTools: false },
-		makeDeps(),
-	);
+	const s = await startServer({ port: 0, host: "127.0.0.1", token: TOKEN, deny: [], denyMCPTools: false }, makeDeps());
 	try {
 		await fn(`http://127.0.0.1:${s.port}/`);
 	} finally {
@@ -63,14 +64,14 @@ async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
 
 describe("server protocol", () => {
 	test("no Authorization -> 401", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(base, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
 			expect(res.status).toBe(401);
 		});
 	});
 
 	test("wrong token -> 401", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(
 				base,
 				{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
@@ -81,7 +82,7 @@ describe("server protocol", () => {
 	});
 
 	test("unauthenticated DELETE -> 401 (auth precedes state changes)", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const res = await fetch(base, { method: "DELETE", headers: { "mcp-session-id": sid } });
 			expect(res.status).toBe(401);
@@ -92,7 +93,7 @@ describe("server protocol", () => {
 	});
 
 	test("initialize -> 200 with fixed protocolVersion and session id", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(base, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, AUTH);
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { result: { protocolVersion: string; serverInfo: { name: string } } };
@@ -103,7 +104,7 @@ describe("server protocol", () => {
 	});
 
 	test("initialize with unsupported protocolVersion -> server version wins", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(
 				base,
 				{ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "1999-01-01" } },
@@ -116,7 +117,7 @@ describe("server protocol", () => {
 	});
 
 	test("non-initialize request without session id -> 400", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(base, { jsonrpc: "2.0", id: 1, method: "tools/list" }, AUTH);
 			expect(res.status).toBe(400);
 			const body = (await res.json()) as { error: { code: number; message: string } };
@@ -125,14 +126,14 @@ describe("server protocol", () => {
 	});
 
 	test("notification without session id -> 400 (no bypass via header omission)", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(base, { jsonrpc: "2.0", method: "notifications/initialized" }, AUTH);
 			expect(res.status).toBe(400);
 		});
 	});
 
 	test("notification with session id -> 202", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const res = await post(
 				base,
@@ -144,7 +145,7 @@ describe("server protocol", () => {
 	});
 
 	test("unknown session id -> 404", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(
 				base,
 				{ jsonrpc: "2.0", id: 5, method: "ping" },
@@ -155,7 +156,7 @@ describe("server protocol", () => {
 	});
 
 	test("idle TTL: activity refreshes the clock, expiry purges", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const start = clock;
 			const sid = await init(base);
 
@@ -179,7 +180,7 @@ describe("server protocol", () => {
 	});
 
 	test("authenticated DELETE -> 204 and the session is gone", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const del = await fetch(base, { method: "DELETE", headers: { ...AUTH, "mcp-session-id": sid } });
 			expect(del.status).toBe(204);
@@ -189,11 +190,15 @@ describe("server protocol", () => {
 	});
 
 	test("session map is bounded: oldest evicted past MAX_SESSIONS", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sids: string[] = [];
 			for (let i = 0; i < MAX_SESSIONS + 5; i++) sids.push(await init(base));
 
-			const oldest = await post(base, { jsonrpc: "2.0", id: 2, method: "ping" }, { ...AUTH, "mcp-session-id": sids[0] });
+			const oldest = await post(
+				base,
+				{ jsonrpc: "2.0", id: 2, method: "ping" },
+				{ ...AUTH, "mcp-session-id": sids[0] },
+			);
 			expect(oldest.status).toBe(404);
 			const newest = await post(
 				base,
@@ -205,7 +210,7 @@ describe("server protocol", () => {
 	});
 
 	test("tools/list -> catalog, no nextCursor", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const res = await post(base, { jsonrpc: "2.0", id: 2, method: "tools/list" }, { ...AUTH, "mcp-session-id": sid });
 			expect(res.status).toBe(200);
@@ -216,7 +221,7 @@ describe("server protocol", () => {
 	});
 
 	test("tools/call echo roundtrip", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const res = await post(
 				base,
@@ -233,7 +238,7 @@ describe("server protocol", () => {
 	});
 
 	test("throwing tool -> isError result, still HTTP 200", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const res = await post(
 				base,
@@ -248,7 +253,7 @@ describe("server protocol", () => {
 	});
 
 	test("unknown method -> -32601", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const sid = await init(base);
 			const res = await post(base, { jsonrpc: "2.0", id: 6, method: "foo" }, { ...AUTH, "mcp-session-id": sid });
 			expect(res.status).toBe(200);
@@ -258,14 +263,14 @@ describe("server protocol", () => {
 	});
 
 	test("GET -> 405", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await fetch(base);
 			expect(res.status).toBe(405);
 		});
 	});
 
 	test("invalid JSON body -> 400 parse error", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(base, "{not json", AUTH);
 			expect(res.status).toBe(400);
 			const body = (await res.json()) as { error?: { code: number } };
@@ -274,7 +279,7 @@ describe("server protocol", () => {
 	});
 
 	test("missing/wrong jsonrpc field -> 400 invalid request", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			let res = await post(base, { id: 1, method: "ping" }, AUTH);
 			expect(res.status).toBe(400);
 			res = await post(base, { jsonrpc: "1.0", id: 1, method: "ping" }, AUTH);
@@ -285,7 +290,7 @@ describe("server protocol", () => {
 	});
 
 	test("batch request -> 400 invalid request", async () => {
-		await withServer(async base => {
+		await withServer(async (base) => {
 			const res = await post(base, [{ jsonrpc: "2.0", id: 1, method: "ping" }], AUTH);
 			expect(res.status).toBe(400);
 		});

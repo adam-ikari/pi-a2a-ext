@@ -17,8 +17,7 @@ describe("tokenEqual", () => {
 
 describe("authorize", () => {
 	const cfg = { token: "s3cret" };
-	const headers = (value: string | null): Headers =>
-		new Headers(value === null ? {} : { authorization: value });
+	const headers = (value: string | null): Headers => new Headers(value === null ? {} : { authorization: value });
 
 	test("accepts the exact token", () => expect(authorize(cfg, headers("Bearer s3cret"))).toBe(true));
 	test("rejects a wrong token", () => expect(authorize(cfg, headers("Bearer wrong!!"))).toBe(false));

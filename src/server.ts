@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import { authorize } from "./auth.ts";
 import type { BridgeConfig } from "./config.ts";
 
-export type McpContent =
-	| { type: "text"; text: string }
-	| { type: "image"; data: string; mimeType: string };
+export type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
 export interface McpTool {
 	name: string;
@@ -14,11 +12,7 @@ export interface McpTool {
 
 export interface BridgeDeps {
 	getTools(): Promise<McpTool[]>;
-	callTool(
-		name: string,
-		args: unknown,
-		sid: string | null,
-	): Promise<{ content: McpContent[]; isError: boolean }>;
+	callTool(name: string, args: unknown, sid: string | null): Promise<{ content: McpContent[]; isError: boolean }>;
 	serverInfo(): { name: string; version: string };
 	/** Clock override for tests (session TTL / eviction). Defaults to Date.now. */
 	now?(): number;
@@ -96,12 +90,7 @@ export async function startServer(
 				return json(400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
 			}
 			const rpc = msg as JsonRpcRequest;
-			if (
-				typeof rpc !== "object" ||
-				rpc === null ||
-				rpc.jsonrpc !== "2.0" ||
-				typeof rpc.method !== "string"
-			) {
+			if (typeof rpc !== "object" || rpc === null || rpc.jsonrpc !== "2.0" || typeof rpc.method !== "string") {
 				return json(400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
 			}
 			// Normalize: JSON.stringify drops an undefined id, which would yield a

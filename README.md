@@ -128,9 +128,10 @@ v1 边界：
 bun install
 
 bun run typecheck     # 类型检查
+bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，手动跑）
-bun run test:hardening # 真实宿主加固核验，28 项（需本机 omp，手动跑）
+bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
 bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
 ```
 

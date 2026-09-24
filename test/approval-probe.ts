@@ -57,14 +57,10 @@ copyFileSync(realModels, join(agentDir, "models.yml"));
 const t0 = Date.now();
 const stage = (msg: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 
-const child = spawn(
-	process.env.OMP_BIN ?? "omp",
-	["--mode", "rpc", "--approval-mode=always-ask"],
-	{
-		env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath, A2A_BRIDGE_AUDIT: auditPath },
-		stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
-	},
-);
+const child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc", "--approval-mode=always-ask"], {
+	env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath, A2A_BRIDGE_AUDIT: auditPath },
+	stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
+});
 
 const base = `http://127.0.0.1:${PORT}/`;
 const AUTH: Record<string, string> = {};
@@ -144,8 +140,13 @@ try {
 			result?: { isError?: boolean; content: Array<{ text?: string }> };
 			error?: unknown;
 		};
-		const txt = (bb.result?.content ?? []).map(c => c.text ?? "").join("\n").slice(0, 300);
-		stage(`bash call RETURNED in ${Date.now() - tBash}ms: http ${br.status} isError=${bb.result?.isError} error=${JSON.stringify(bb.error ?? null)}`);
+		const txt = (bb.result?.content ?? [])
+			.map((c) => c.text ?? "")
+			.join("\n")
+			.slice(0, 300);
+		stage(
+			`bash call RETURNED in ${Date.now() - tBash}ms: http ${br.status} isError=${bb.result?.isError} error=${JSON.stringify(bb.error ?? null)}`,
+		);
 		stage(`bash text: ${txt}`);
 		verdict = bb.result?.isError
 			? "A: isError returned promptly -> behavior regressed to fail-closed; update README approval section"
@@ -183,8 +184,8 @@ try {
 				// partial trailing line
 			}
 		}
-		const starts = recs.filter(r => r.tool === "bash" && r.phase === "start").length;
-		const dones = recs.filter(r => r.tool === "bash" && r.phase === "done").length;
+		const starts = recs.filter((r) => r.tool === "bash" && r.phase === "start").length;
+		const dones = recs.filter((r) => r.tool === "bash" && r.phase === "done").length;
 		stage(`audit: bash records start=${starts} done=${dones}`);
 		if (starts === 0) {
 			stage("AUDIT FAIL: call left no start record (dispatch-time audit broken)");

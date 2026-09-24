@@ -31,7 +31,8 @@ const auditPath = join(agentDir, "a2a-bridge.log");
 const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
 const dataFile = join(tmp, "payload.txt");
-const payload = `HARDEN-PAYLOAD-${Date.now()}\nsecond line\n`;
+const firstLine = `HARDEN-PAYLOAD-${Date.now()}`;
+const payload = `${firstLine}\nsecond line\n`;
 
 let failures = 0;
 function check(cond: unknown, label: string): void {
@@ -54,10 +55,7 @@ probe.stop(true);
 
 // Seed config WITHOUT a token: the app must heal it (generate + persist + 0600)
 // while keeping our fixed port.
-writeFileSync(
-	cfgPath,
-	JSON.stringify({ port: PORT, host: "127.0.0.1", deny: ["bash"], denyMCPTools: false }, null, 2),
-);
+writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1", deny: ["bash"], denyMCPTools: false }, null, 2));
 
 const realModelsYml = join(process.env.HOME ?? "", ".omp", "agent", "models.yml");
 if (!existsSync(realModelsYml)) {
@@ -108,7 +106,10 @@ try {
 	}, "config token heal");
 	const token = (JSON.parse(readFileSync(cfgPath, "utf8")) as { token: string }).token;
 	check(token.length === 43, `healed token is 32B base64url (got ${token.length} chars)`);
-	check((statSync(cfgPath).mode & 0o777) === 0o600, `config is 0600 after heal (got ${(statSync(cfgPath).mode & 0o777).toString(8)})`);
+	check(
+		(statSync(cfgPath).mode & 0o777) === 0o600,
+		`config is 0600 after heal (got ${(statSync(cfgPath).mode & 0o777).toString(8)})`,
+	);
 
 	const AUTH = { authorization: `Bearer ${token}` };
 
@@ -126,7 +127,10 @@ try {
 	let r = await post({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "1999-01-01" } }, AUTH);
 	const neg = (await r.json()) as { result: { protocolVersion: string } };
 	const sid2 = r.headers.get("mcp-session-id") ?? "";
-	check(r.status === 200 && neg.result.protocolVersion === "2025-11-25", "unsupported requested version -> server version");
+	check(
+		r.status === 200 && neg.result.protocolVersion === "2025-11-25",
+		"unsupported requested version -> server version",
+	);
 
 	// 4. Session enforcement.
 	r = await post({ jsonrpc: "2.0", method: "notifications/initialized" }, { ...AUTH, "mcp-session-id": sid1 });
@@ -161,7 +165,7 @@ try {
 	// 7. Exposure: deny list + catalog intersection.
 	r = await post({ jsonrpc: "2.0", id: 10, method: "tools/list" }, { ...AUTH, "mcp-session-id": sid1 });
 	const list = (await r.json()) as { result: { tools: Array<{ name: string }> } };
-	const names = list.result.tools.map(t => t.name);
+	const names = list.result.tools.map((t) => t.name);
 	check(names.includes("read"), "tools/list contains read");
 	check(!names.includes("bash"), "denied tool absent from tools/list");
 	r = await post(
@@ -189,8 +193,8 @@ try {
 		{ ...AUTH, "mcp-session-id": sid1 },
 	);
 	call = (await r.json()) as { result: { isError: boolean; content: Array<{ text?: string }> } };
-	const text = call.result.content.map(c => c.text ?? "").join("\n");
-	check(call.result.isError === false && text.includes(payload.split("\n")[0]!), "tools/call read works on Main session");
+	const text = call.result.content.map((c) => c.text ?? "").join("\n");
+	check(call.result.isError === false && text.includes(firstLine), "tools/call read works on Main session");
 
 	// 9. Audit log: two-phase records — start at dispatch, done on completion.
 	const audit = await until(async () => {
@@ -209,13 +213,13 @@ try {
 			// partial trailing line
 		}
 	}
-	const startIds = new Set(recs.filter(r => r.phase === "start").map(r => r.id));
+	const startIds = new Set(recs.filter((r) => r.phase === "start").map((r) => r.id));
 	check(
-		recs.filter(r => r.phase === "done").every(r => startIds.has(r.id)),
+		recs.filter((r) => r.phase === "done").every((r) => startIds.has(r.id)),
 		"every done record pairs with a start record",
 	);
 	check(
-		recs.some(r => r.phase === "done" && r.tool === "read" && r.sid === sid1),
+		recs.some((r) => r.phase === "done" && r.tool === "read" && r.sid === sid1),
 		"audit records carry the session id (attribution)",
 	);
 	check((statSync(auditPath).mode & 0o777) === 0o600, "audit log is 0600");

@@ -15,7 +15,7 @@ interface FakeTool {
 }
 
 function makePi(names: string[]): ExtensionAPI {
-	const tools: FakeTool[] = names.map(name => ({
+	const tools: FakeTool[] = names.map((name) => ({
 		name,
 		description: `${name} tool`,
 		parameters: { type: "object", properties: { path: { type: "string" } } },
@@ -64,7 +64,7 @@ async function readLines(file: string): Promise<Array<Record<string, unknown>>> 
 				.trim()
 				.split("\n")
 				.filter(Boolean)
-				.map(l => JSON.parse(l) as Record<string, unknown>);
+				.map((l) => JSON.parse(l) as Record<string, unknown>);
 			if (lines.length > 0) return lines;
 		} catch {
 			// not flushed yet
@@ -79,21 +79,21 @@ async function callText(
 	name: string,
 ) {
 	const r = await call(name, {});
-	return { isError: r.isError, text: r.content.map(c => (c.type === "text" ? c.text : "")).join("\n") };
+	return { isError: r.isError, text: r.content.map((c) => (c.type === "text" ? c.text : "")).join("\n") };
 }
 
 describe("buildToolCatalog", () => {
 	test("exposes everything except denied and mcp__ tools", async () => {
 		const pi = makePi(["read", "hidden_tool", "mcp__srv__tool"]);
 		const catalog = await buildToolCatalog(pi, cfg)();
-		expect(catalog.map(t => t.name)).toEqual(["read"]);
+		expect(catalog.map((t) => t.name)).toEqual(["read"]);
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object" });
 	});
 
 	test("denyMCPTools off keeps mcp tools", async () => {
 		const pi = makePi(["mcp__srv__tool"]);
 		const catalog = await buildToolCatalog(pi, { ...cfg, denyMCPTools: false })();
-		expect(catalog.map(t => t.name)).toEqual(["mcp__srv__tool"]);
+		expect(catalog.map((t) => t.name)).toEqual(["mcp__srv__tool"]);
 	});
 });
 
@@ -142,13 +142,13 @@ describe("audit log", () => {
 
 		// Match by content, not position: earlier tests append to this same
 		// file, and flush order across fire-and-forget writes is not a contract.
-		const start = await untilRecord(l => l.phase === "start" && String(l.args ?? "").includes("/etc/hostname"));
+		const start = await untilRecord((l) => l.phase === "start" && String(l.args ?? "").includes("/etc/hostname"));
 		expect(start).toBeDefined();
 		expect(start).toMatchObject({ tool: "read", sid: "sess-1" });
 		expect(typeof start?.id).toBe("string");
 		expect(typeof start?.ts).toBe("string");
 
-		const done = await untilRecord(l => l.phase === "done" && l.id === start?.id);
+		const done = await untilRecord((l) => l.phase === "done" && l.id === start?.id);
 		expect(done).toBeDefined();
 		expect(done).toMatchObject({ tool: "read", isError: true, sid: "sess-1" });
 		expect(String(done?.args ?? "")).toContain("/etc/hostname");
@@ -160,11 +160,11 @@ describe("audit log", () => {
 		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
 		await call("guessed_tool", {});
 
-		const start = await untilRecord(l => l.phase === "start" && l.tool === "guessed_tool");
+		const start = await untilRecord((l) => l.phase === "start" && l.tool === "guessed_tool");
 		expect(start).toBeDefined();
 		expect(typeof start?.id).toBe("string");
 
-		const done = await untilRecord(l => l.phase === "done" && l.tool === "guessed_tool");
+		const done = await untilRecord((l) => l.phase === "done" && l.tool === "guessed_tool");
 		expect(done).toBeDefined();
 		expect(done).toMatchObject({ isError: true });
 		expect(done?.id).toBe(start?.id);

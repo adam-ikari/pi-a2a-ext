@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
@@ -75,7 +75,7 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 		cfg.host = p.host;
 	}
 	if ("deny" in p) {
-		if (!Array.isArray(p.deny) || p.deny.some(d => typeof d !== "string")) {
+		if (!Array.isArray(p.deny) || p.deny.some((d) => typeof d !== "string")) {
 			throw fieldError(file, "deny", "an array of tool-name strings");
 		}
 		cfg.deny = p.deny as string[];
@@ -102,7 +102,7 @@ export async function saveConfig(cfg: BridgeConfig, env?: NodeJS.ProcessEnv): Pr
 	await mkdir(dirname(file), { recursive: true });
 	// `mode` applies at creation (no 0644 window before chmod); chmod keeps
 	// rotation correct for a file that already exists with looser permissions.
-	await writeFile(file, JSON.stringify(cfg, null, "\t") + "\n", { mode: 0o600 });
+	await writeFile(file, `${JSON.stringify(cfg, null, "\t")}\n`, { mode: 0o600 });
 	await chmod(file, 0o600);
 }
 

@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { buildCallTool, buildToolCatalog } from "../src/bridge.ts";
-import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
 import type { BridgeConfig } from "../src/config.ts";
+import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
 import { startServer } from "../src/server.ts";
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;

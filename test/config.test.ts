@@ -1,11 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { rm, stat, writeFile } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configPath, generateToken, isDenied, loadConfig, saveConfig } from "../src/config.ts";
 import type { BridgeConfig } from "../src/config.ts";
+import { configPath, generateToken, isDenied, loadConfig, saveConfig } from "../src/config.ts";
 
 let dir: string;
 let file: string;

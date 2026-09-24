@@ -1,6 +1,6 @@
+import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 
 // Version guard: the "pin == host omp version" invariant is hand-maintained
 // and silently drifted before (host 18.2.11 vs pin 18.2.10, node_modules
@@ -47,9 +47,7 @@ describe("version guard", () => {
 		}
 		const pin = pkg.devDependencies["@oh-my-pi/pi-coding-agent"];
 		if (m[1] !== pin) {
-			console.warn(
-				`[versions] host omp ${m[1]} != pinned ${pin} — update devDependencies and re-run bun install`,
-			);
+			console.warn(`[versions] host omp ${m[1]} != pinned ${pin} — update devDependencies and re-run bun install`);
 		}
 	});
 });

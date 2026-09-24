@@ -1,16 +1,15 @@
-import { AgentRegistry, MAIN_AGENT_ID, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import type { TSchema } from "@oh-my-pi/pi-ai";
 import { randomUUID } from "node:crypto";
-import { auditDone, auditStart } from "./audit.ts";
-import { isDenied } from "./config.ts";
-import type { BridgeConfig } from "./config.ts";
-import type { McpContent, McpTool } from "./server.ts";
-
+import type { TSchema } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
 // Loads pi-coding-agent's AgentToolContext augmentation (CustomToolContext
 // fields + ui/hasUI) so the execute() context literal is fully type-checked
 // instead of relying on the all-optional base declaration.
 import type {} from "@oh-my-pi/pi-coding-agent/tools/context";
+import { auditDone, auditStart } from "./audit.ts";
+import type { BridgeConfig } from "./config.ts";
+import { isDenied } from "./config.ts";
+import type { McpContent, McpTool } from "./server.ts";
 
 /** Convert a ToolInfo schema to JSON Schema; fall back to raw parameters. */
 function toInputSchema(parameters: TSchema): Record<string, unknown> {
@@ -71,7 +70,7 @@ export function buildCallTool(
 		// token learns nothing about which names exist behind the curtain.
 		const notExposed = `tool '${name}' is not exposed by this bridge`;
 		if (isDenied(cfg, name)) return { content: [{ type: "text", text: notExposed }], isError: true };
-		if (!pi.getAllTools().some(t => t.name === name)) {
+		if (!pi.getAllTools().some((t) => t.name === name)) {
 			return { content: [{ type: "text", text: notExposed }], isError: true };
 		}
 		const ref = AgentRegistry.global().get(MAIN_AGENT_ID);
@@ -97,7 +96,7 @@ export function buildCallTool(
 		};
 		try {
 			const r = await tool.execute(randomUUID(), args, undefined, undefined, ctx);
-			const content = (r.content ?? []).map(b =>
+			const content = (r.content ?? []).map((b) =>
 				b?.type === "text"
 					? { type: "text" as const, text: b.text }
 					: b?.type === "image"

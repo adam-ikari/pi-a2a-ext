@@ -117,8 +117,8 @@ try {
 		body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
 	});
 	const list = (await r.json()) as { result: { tools: Array<{ name: string }> } };
-	if (!list.result?.tools?.some(t => t.name === "read")) {
-		fail(`tools/list missing 'read'; got ${JSON.stringify(list.result?.tools?.map(t => t.name))}`);
+	if (!list.result?.tools?.some((t) => t.name === "read")) {
+		fail(`tools/list missing 'read'; got ${JSON.stringify(list.result?.tools?.map((t) => t.name))}`);
 	}
 	console.log(`ok: tools/list exposes ${list.result.tools.length} tools incl. read`);
 
@@ -136,7 +136,7 @@ try {
 	const call = (await r.json()) as {
 		result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> };
 	};
-	const text = call.result?.content?.map(c => c.text ?? "").join("\n") ?? "";
+	const text = call.result?.content?.map((c) => c.text ?? "").join("\n") ?? "";
 	if (call.result?.isError) fail(`read returned isError: ${text.slice(0, 300)}`);
 	const firstLine = payload.split("\n")[0];
 	if (!text.includes(firstLine)) {

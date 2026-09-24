@@ -8,6 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
+    "lint": "biome check .",
     "test": "bun test",
     "test:smoke": "bun test/smoke.ts",
     "test:hardening": "bun test/hardening.ts",
