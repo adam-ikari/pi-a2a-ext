@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,16 +36,27 @@ const cfg: BridgeConfig = {
 	denyMCPTools: true,
 };
 
+// Sandbox the audit log for the WHOLE file, not just the audit test: every
+// buildCallTool path (including the exposure-gate rejections) appends, and
+// without this the fire-and-forget writes would land in the real
+// ~/.omp/agent/a2a-bridge.log of whoever runs the tests.
 const savedEnv = { ...process.env };
+let auditDir: string;
 
-afterAll(() => {
+beforeAll(async () => {
+	auditDir = await mkdtemp(join(tmpdir(), "a2a-audit-"));
+	process.env.A2A_BRIDGE_AUDIT = join(auditDir, "audit.log");
+});
+
+afterAll(async () => {
 	if (savedEnv.A2A_BRIDGE_AUDIT === undefined) delete process.env.A2A_BRIDGE_AUDIT;
 	else process.env.A2A_BRIDGE_AUDIT = savedEnv.A2A_BRIDGE_AUDIT;
+	await rm(auditDir, { recursive: true, force: true });
 });
 
 /** auditCall is fire-and-forget; poll until the async flush lands. */
-async function readLines(file: string, min: number): Promise<Array<Record<string, unknown>>> {
-	const deadline = Date.now() + 2000;
+async function readLines(file: string): Promise<Array<Record<string, unknown>>> {
+	const deadline = Date.now() + 3000;
 	let lines: Array<Record<string, unknown>> = [];
 	while (Date.now() < deadline) {
 		try {
@@ -54,7 +65,7 @@ async function readLines(file: string, min: number): Promise<Array<Record<string
 				.split("\n")
 				.filter(Boolean)
 				.map(l => JSON.parse(l) as Record<string, unknown>);
-			if (lines.length >= min) return lines;
+			if (lines.length > 0) return lines;
 		} catch {
 			// not flushed yet
 		}
@@ -113,21 +124,26 @@ describe("buildCallTool exposure gate", () => {
 
 describe("audit log", () => {
 	test("records tool, outcome, and args as JSONL", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "a2a-audit-"));
-		process.env.A2A_BRIDGE_AUDIT = join(dir, "audit.log");
-		try {
-			const call = buildCallTool(makePi(["read"]), extCtx, cfg);
-			await call("read", { path: "/etc/hostname" });
-			await call("guessed_tool", {});
+		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
+		await call("read", { path: "/etc/hostname" });
+		await call("guessed_tool", {});
 
-			const lines = await readLines(auditLogPath(), 2);
-			expect(lines).toHaveLength(2);
-			expect(lines[0]).toMatchObject({ tool: "read", isError: true });
-			expect(String(lines[0]?.args)).toContain("/etc/hostname");
-			expect(lines[1]).toMatchObject({ tool: "guessed_tool", isError: true });
-			expect(typeof lines[0]?.ts).toBe("string");
-		} finally {
-			await rm(dir, { recursive: true, force: true });
+		// Flush order between the two fire-and-forget appends is not guaranteed,
+		// and the exposure-gate tests above have already written to this file —
+		// so match by content instead of by position or total line count.
+		const deadline = Date.now() + 3000;
+		let readRec: Record<string, unknown> | undefined;
+		let probeRec: Record<string, unknown> | undefined;
+		while (Date.now() < deadline && (!readRec || !probeRec)) {
+			for (const l of await readLines(auditLogPath())) {
+				if (String(l.args ?? "").includes("/etc/hostname")) readRec = l;
+				if (l.tool === "guessed_tool") probeRec = l;
+			}
+			if (!readRec || !probeRec) await Bun.sleep(10);
 		}
+
+		expect(readRec).toMatchObject({ tool: "read", isError: true });
+		expect(typeof readRec?.ts).toBe("string");
+		expect(probeRec).toMatchObject({ tool: "guessed_tool", isError: true });
 	});
 });
