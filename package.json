@@ -12,7 +12,8 @@
     "test": "bun test",
     "test:smoke": "bun test/smoke.ts",
     "test:hardening": "bun test/hardening.ts",
-    "test:approval": "bun test/approval-probe.ts"
+    "test:approval": "bun test/approval-probe.ts",
+    "website": "cd website && bun run start"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",

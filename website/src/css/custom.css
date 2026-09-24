@@ -1,0 +1,9 @@
+/* Site-wide tweaks on top of Infima defaults. */
+
+html {
+	scroll-behavior: smooth;
+}
+
+.hero--primary {
+	background: linear-gradient(135deg, #16244a 0%, #2a4a8c 55%, #3a6bb5 100%);
+}

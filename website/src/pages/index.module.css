@@ -1,0 +1,57 @@
+.heroBanner {
+	padding: 4rem 0;
+	text-align: center;
+}
+
+.buttons {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 1rem;
+	margin-top: 1.5rem;
+}
+
+.outlineButton {
+	color: #fff;
+	border-color: #fff;
+}
+
+.outlineButton:hover {
+	color: var(--ifm-color-primary);
+	background: #fff;
+	border-color: #fff;
+}
+
+.featureCard {
+	margin-bottom: 1.5rem;
+}
+
+.featureLink {
+	display: block;
+	height: 100%;
+	padding: 1.25rem;
+	border: 1px solid var(--ifm-color-emphasis-3);
+	border-radius: 0.5rem;
+	transition:
+		box-shadow 0.2s ease,
+		border-color 0.2s ease;
+	color: inherit;
+	text-decoration: none;
+}
+
+.featureLink:hover {
+	border-color: var(--ifm-color-primary);
+	box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+	text-decoration: none;
+}
+
+.featureLink h3 {
+	margin-bottom: 0.5rem;
+	font-size: 1.1rem;
+}
+
+.featureLink p {
+	margin-bottom: 0;
+	font-size: 0.9rem;
+	color: var(--ifm-color-emphasis-700);
+}

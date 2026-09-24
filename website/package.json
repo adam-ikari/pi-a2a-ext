@@ -1,0 +1,18 @@
+{
+	"name": "pi-a2a-ext-website",
+	"private": true,
+	"scripts": {
+		"sync": "node scripts/sync.mjs",
+		"start": "node scripts/sync.mjs && docusaurus start",
+		"build": "node scripts/sync.mjs && docusaurus build",
+		"serve": "docusaurus serve",
+		"clear": "docusaurus clear"
+	},
+	"dependencies": {
+		"@docusaurus/core": "3.10.2",
+		"@docusaurus/preset-classic": "3.10.2",
+		"@mdx-js/react": "^3.1.0",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1"
+	}
+}

@@ -145,6 +145,7 @@ bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门
 bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，手动跑）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
 bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
+bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
 ```
 
 各测试的覆盖面、真实宿主探针的前置条件与判读标准（含审批探针 VERDICT A/B/C 语义）见 [docs/testing.md](docs/testing.md)。
