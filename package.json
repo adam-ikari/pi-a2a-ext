@@ -6,7 +6,9 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun test",
-    "test:smoke": "bun test/smoke.ts"
+    "test:smoke": "bun test/smoke.ts",
+    "test:hardening": "bun test/hardening.ts",
+    "test:approval": "bun test/approval-probe.ts"
   },
   "devDependencies": {
     "@oh-my-pi/pi-ai": "18.2.10",
