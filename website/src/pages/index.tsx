@@ -83,7 +83,7 @@ export default function Home() {
 	const { siteConfig } = useDocusaurusContext();
 	return (
 		<Layout title="首页" description={siteConfig.tagline}>
-			<header className={clsx("hero hero--primary", styles.heroBanner)}>
+			<header className={clsx("hero", styles.heroBanner)}>
 				<div className="container">
 					<div className={styles.heroGrid}>
 						<div className={styles.heroText}>

@@ -1,5 +1,10 @@
 import type { Config } from "@docusaurus/types";
 
+// jiti (config loader) interop: require() unwraps the CJS-style default export;
+// a plain ESM import would return the module namespace instead.
+const { default: primerLightTheme } = require("./prism-light.mjs");
+const { default: primerDarkTheme } = require("./prism-dark.mjs");
+
 // GitHub Pages deployment: Actions sets GITHUB_REPOSITORY="owner/repo".
 // Derive url/baseUrl so one config serves both local preview
 // (http://localhost:3000, baseUrl "/") and the published project site
@@ -44,6 +49,11 @@ const config: Config = {
 	],
 	themeConfig: {
 		colorMode: { respectPrefersColorScheme: true },
+		prism: {
+			theme: primerLightTheme,
+			darkTheme: primerDarkTheme,
+			additionalLanguages: ["bash", "json", "typescript", "tsx"],
+		},
 		image: "img/logo.svg",
 		favicon: ["img/favicon.svg"],
 		navbar: {
