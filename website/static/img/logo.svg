@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none"><title>omp A2A Bridge</title>
+	<rect x="1.5" y="1.5" width="45" height="45" rx="10" fill="#0b2b3a" stroke="#38bdf8" stroke-width="2.5" />
+	<circle cx="15" cy="24" r="5.5" fill="#38bdf8" />
+	<circle cx="33" cy="24" r="5.5" fill="#a78bfa" />
+	<path d="M20.5 24h7" stroke="#e0f2fe" stroke-width="2.5" stroke-linecap="round" />
+	<path d="M25.5 20.5 29 24l-3.5 3.5" stroke="#e0f2fe" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

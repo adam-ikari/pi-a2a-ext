@@ -1,9 +1,138 @@
-/* Site-wide tweaks on top of Infima defaults. */
+/* ===== Brand palette (Infima variables) ===== */
+
+:root {
+	--ifm-color-primary: #05819c;
+	--ifm-color-primary-dark: #04748c;
+	--ifm-color-primary-darker: #046d85;
+	--ifm-color-primary-darkest: #035a6e;
+	--ifm-color-primary-light: #068eac;
+	--ifm-color-primary-lighter: #0795b5;
+	--ifm-color-primary-lightest: #08a8cc;
+	--brand-violet: #6a4fd8;
+	--brand-ink: #081a22;
+	--ifm-background-color: #fafcfd;
+	--ifm-font-family-base:
+		system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans CJK SC",
+		"Microsoft YaHei", sans-serif;
+	--ifm-heading-font-weight: 700;
+	--ifm-code-font-size: 92%;
+	--ifm-navbar-height: 3.6rem;
+	--docusaurus-highlighted-code-line-bg: rgb(0 0 0 / 10%);
+}
+
+html[data-theme="dark"] {
+	--ifm-color-primary: #38bdf8;
+	--ifm-color-primary-dark: #0ea5e9;
+	--ifm-color-primary-darker: #0284c7;
+	--ifm-color-primary-darkest: #0369a1;
+	--ifm-color-primary-light: #7dd3fc;
+	--ifm-color-primary-lighter: #bae6fd;
+	--ifm-color-primary-lightest: #e0f2fe;
+	--brand-violet: #a78bfa;
+	--brand-ink: #050d12;
+	--ifm-background-color: #071219;
+	--ifm-navbar-background-color: #071219f2;
+	--ifm-footer-background-color: #050d12;
+	--docusaurus-highlighted-code-line-bg: rgb(255 255 255 / 12%);
+}
 
 html {
 	scroll-behavior: smooth;
 }
 
-.hero--primary {
-	background: linear-gradient(135deg, #16244a 0%, #2a4a8c 55%, #3a6bb5 100%);
+/* ===== Navbar ===== */
+
+.navbar {
+	border-bottom: 1px solid var(--ifm-color-emphasis-2);
+	backdrop-filter: blur(8px);
+	background: #fafcfded;
+}
+
+html[data-theme="dark"] .navbar {
+	background: var(--ifm-navbar-background-color);
+}
+
+.navbar__title {
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+.navbar__item.navbar__link {
+	font-weight: 500;
+}
+
+/* ===== Docs pages ===== */
+
+.markdown > h2 {
+	--ifm-h2-font-size: 1.5rem;
+	border-bottom: 1px solid var(--ifm-color-emphasis-2);
+	padding-bottom: 0.45rem;
+}
+
+.theme-doc-markdown table {
+	display: table;
+	width: auto;
+	font-size: 0.92rem;
+}
+
+.theme-doc-markdown code {
+	border: 1px solid var(--ifm-color-emphasis-2);
+	border-radius: 6px;
+	padding: 0.15rem 0.35rem;
+	background: var(--ifm-color-emphasis-100);
+}
+
+.theme-doc-markdown pre code {
+	border: none;
+	padding: 0;
+	background: transparent;
+}
+
+.prism > .token-line,
+pre {
+	font-variant-ligatures: none;
+}
+
+/* left sidebar: subtler selection */
+.menu__link--active:not(.menu__link--sublist) {
+	background: var(--ifm-color-primary);
+}
+
+html[data-theme="dark"] .menu__link--active:not(.menu__link--sublist) {
+	background: var(--ifm-color-emphasis-200);
+}
+
+/* ===== Footer ===== */
+
+.footer {
+	--ifm-footer-background-color: var(--brand-ink);
+	background: var(--brand-ink);
+}
+
+.footer--dark {
+	--ifm-footer-background-color: var(--brand-ink);
+}
+
+.footer__title {
+	color: #38bdf8;
+	font-size: 0.85rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.footer__link-item {
+	color: #cbd5e1;
+}
+
+.footer__link-item:hover {
+	color: #fff;
+}
+
+/* ===== Utilities ===== */
+
+.brandedGradient {
+	background:
+		radial-gradient(1200px 500px at 85% -10%, rgb(106 79 216 / 35%), transparent 60%),
+		radial-gradient(900px 420px at 10% 120%, rgb(56 189 248 / 30%), transparent 60%),
+		linear-gradient(150deg, #071a24 0%, #0b2b3a 48%, #123a4d 100%);
 }

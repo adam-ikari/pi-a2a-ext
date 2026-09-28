@@ -44,14 +44,18 @@ const config: Config = {
 	],
 	themeConfig: {
 		colorMode: { respectPrefersColorScheme: true },
+		image: "img/logo.svg",
+		favicon: ["img/favicon.svg"],
 		navbar: {
 			title: "omp A2A Bridge",
+			logo: { src: "img/logo.svg", alt: "omp A2A Bridge logo" },
 			items: [
 				{ type: "doc", docId: "intro", label: "指南", position: "left" },
 				{ type: "doc", docId: "protocol", label: "协议", position: "left" },
 				{ type: "doc", docId: "testing", label: "测试", position: "left" },
 				{ to: "/docs/changelog", label: "更新日志", position: "left" },
 				{ to: "/", label: "首页", position: "right" },
+				{ href: "https://github.com/adam-ikari/pi-a2a-ext", label: "GitHub", position: "right" },
 			],
 		},
 		footer: {
@@ -67,7 +71,10 @@ const config: Config = {
 				},
 				{
 					title: "更多",
-					items: [{ label: "变更日志", to: "/docs/changelog" }],
+					items: [
+						{ label: "变更日志", to: "/docs/changelog" },
+						{ label: "GitHub 仓库", href: "https://github.com/adam-ikari/pi-a2a-ext" },
+					],
 				},
 			],
 			copyright: "MIT License · omp A2A Bridge",
