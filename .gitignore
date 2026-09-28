@@ -2,3 +2,4 @@ node_modules/
 website/.docusaurus/
 website/build/
 website/content/
+.qoder/
