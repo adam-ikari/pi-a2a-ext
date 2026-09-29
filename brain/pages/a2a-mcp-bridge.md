@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-28T13:59:58"
+updated: "2026-09-29T00:56:21"
 ---
 
 <!-- compiled_truth -->
@@ -195,4 +195,22 @@ Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — m
   kind: evidence
   summary: "E2E rerun on host 18.4.0: smoke/HARDEN(29)/approval(VERDICT B) all green; node_modules drift recurred (18.4.0 vs pin 18.3.2), guard caught it, pins+lock synced to 18.4.0; tsc 0, unit 59/59, lint clean"
   source: test runs 2026-09-28
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-28T15:36:47
+  kind: evidence
+  summary: "docs 站点 GitHub Primer 主题化（2026-09-28）：Docusaurus 3.10 代码块配色的权威路径是根级 themeConfig.prism.theme/darkTheme（preset theme 选项只接受 customCss，根级 prism 被拒）；自定义主题对象必须是 v1 prism-react-renderer 格式 {plain, styles}（含 id/name/type 会被 schema 拒绝）。theme-classic 按该主题运行时注入内联 --prism-background-color/--prism-color，静态 CSS 覆盖必然失效——亮色代码块此前恒为深色的根因。零新增依赖（@primer/primitives 仅设计 token、无 Prism 主题，装后即删）。"
+  source: website/prism-light.mjs / website/prism-dark.mjs / CHANGELOG 2026-09-28
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-29T00:56:07
+  kind: decision
+  summary: "文件传输面（Q8，decided 2026-09-29）：双向（远程→宿主 push、宿主→远程 pull）走 tools/call，**不新增 JSON-RPC 方法**——桥自带 6 个 a2a_file_* 工具挂进既有管线，免费复用鉴权/会话/deny/两阶段审计。线格式复用 A2A FilePart {name,mimeType,bytes(base64)}，不发明新编码。落盘沙箱根 fileRoot 默认 ~/.omp/a2a-bridge-files（agentDir 的**兄弟目录**，刻意不与 token/审计同父，降低遍历 bug 的爆炸半径；ensureRoot 另拒「根是 config/审计祖先」）；maxFileBytes 默认 100MB。1MB 请求体上限不动：内联与单块 512KiB、单次 get 响应 256KiB，100MB≈200 次 put_chunk，分块写入纳入首版（用户明示「需要支持100M以下的文件」，推翻 Plan agent 砍分块的建议）。路径语义：绝对/~/NUL/控制字符/./.. 段一律词法 invalid_path（先拒），escapes_root 专门留给 realpath 检出的符号链接逃逸——两层职责分明。根内符号链接既不顺着读也不顺着写；写入经 <root>/.tmp 原子 rename、0600；分块状态绑 Mcp-Session-Id（跨 sid 与不存在同文案 unknown_transfer），30 分钟空闲**惰性**回收（每次文件调用入口 sweep，无定时器）、并发上限 16。名字冲突 host-wins + 一次性 stderr 告警（桥工具绕过宿主审批门，故不允许反向遮蔽）。威胁模型明示：token 即 fileRoot 内读写权、桥工具无审批门；pull 回的字节能进远程模型上下文，大件建议 SSH 旁路。审计：>120 字符字符串只记 <len:N,sha256:P8>，put_chunk 整体跳过审计（否则一次上传几百行冲爆轮转）。"
+  source: "双向文件传输轮（plan eager-gulf-drum）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-29T00:56:21
+  kind: evidence
+  summary: "文件传输验证基线（宿主 omp 18.4.0）：单测 59→100/100 绿（fileguard 16、filetools 18、bridge 桥工具与脱敏 4、config fail-closed 3）；新增真实宿主探针 test/file-transfer.ts（bun run test:files，54 项 → FILES OK），smoke（现 27 工具，含 6 个 a2a_file_*）、HARDEN 29/29、approval VERDICT B（挂起语义与两阶段审计跨版本未变）全绿。方法论再次生效：put_end 不创建目标父目录（分块上传到不存在的子目录时 rename ENOENT）是**宿主探针**抓到的，单测当时只用顶层路径故全绿——文件面改动必须跑 test:files，不能只信 bun test。另两处非代码坑：(1) website/scripts/sync.mjs 的链接改写用的是 String.replace（只换首个），README 第二次引用同一文档即留下仓库相对路径 → Docusaurus 断链构建失败，已改 replaceAll；(2) 版本守卫比对宿主版本的用例外设 30s 超时——omp --version 冷启动实测约 8s，恒超 bun 默认 5s 会偶发失败。"
+  source: "bun test + 四件宿主探针 2026-09-29"
   affects: [a2a-mcp-bridge]
