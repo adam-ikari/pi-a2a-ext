@@ -32,6 +32,8 @@ describe("version guard", () => {
 		expect(pkg.devDependencies["@oh-my-pi/pi-ai"]).toBe(pkg.devDependencies["@oh-my-pi/pi-coding-agent"]);
 	});
 
+	// Spawning the host CLI is not instantaneous (omp boot is ~8s on a loaded
+	// box), so this test needs a timeout well above bun's 5s default.
 	test("host omp version vs pins (warn only; skipped when omp absent)", () => {
 		let out = "";
 		try {
@@ -49,5 +51,5 @@ describe("version guard", () => {
 		if (m[1] !== pin) {
 			console.warn(`[versions] host omp ${m[1]} != pinned ${pin} — update devDependencies and re-run bun install`);
 		}
-	});
+	}, 30_000);
 });

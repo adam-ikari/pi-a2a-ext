@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { BridgeConfig } from "../src/config.ts";
-import { configPath, generateToken, isDenied, loadConfig, saveConfig } from "../src/config.ts";
+import { configPath, DEFAULT_MAX_FILE_BYTES, generateToken, isDenied, loadConfig, saveConfig } from "../src/config.ts";
 
 let dir: string;
 let file: string;
@@ -15,6 +15,8 @@ const VALID: BridgeConfig = {
 	host: "127.0.0.1",
 	deny: ["bash", "write"],
 	denyMCPTools: true,
+	fileRoot: "/tmp/a2a-unit-files",
+	maxFileBytes: 1048576,
 };
 
 beforeAll(async () => {
@@ -38,6 +40,8 @@ describe("loadConfig", () => {
 		expect(cfg.host).toBe("127.0.0.1");
 		expect(cfg.deny).toEqual([]);
 		expect(cfg.denyMCPTools).toBe(false);
+		expect(isAbsolute(cfg.fileRoot)).toBe(true);
+		expect(cfg.maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES);
 		expect(cfg.token).toHaveLength(43); // 32 random bytes, base64url
 	});
 
@@ -86,6 +90,23 @@ describe("loadConfig", () => {
 	test("denyMCPTools of the wrong type -> fail-closed", async () => {
 		await writeFile(file, JSON.stringify({ ...VALID, denyMCPTools: "yes" }));
 		await expect(loadConfig(env)).rejects.toThrow(`field 'denyMCPTools' must be a boolean`);
+	});
+
+	test("relative fileRoot -> fail-closed", async () => {
+		await writeFile(file, JSON.stringify({ ...VALID, fileRoot: "relative/dir" }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'fileRoot' must be a non-empty absolute path`);
+	});
+
+	test("fileRoot of the wrong type -> fail-closed", async () => {
+		await writeFile(file, JSON.stringify({ ...VALID, fileRoot: 42 }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'fileRoot' must be a non-empty absolute path`);
+	});
+
+	test("maxFileBytes out of range -> fail-closed", async () => {
+		await writeFile(file, JSON.stringify({ ...VALID, maxFileBytes: 10 }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'maxFileBytes' must be an integer`);
+		await writeFile(file, JSON.stringify({ ...VALID, maxFileBytes: 2 * 1024 * 1024 * 1024 }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'maxFileBytes' must be an integer`);
 	});
 
 	test("missing token -> regenerated and persisted (stable across restarts)", async () => {

@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { auditLogPath } from "../src/audit.ts";
 import { buildCallTool, buildToolCatalog } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
+import type { BridgeTool } from "../src/filetools.ts";
 import type { McpContent } from "../src/server.ts";
 
 interface FakeTool {
@@ -34,6 +35,8 @@ const cfg: BridgeConfig = {
 	host: "127.0.0.1",
 	deny: ["hidden_tool"],
 	denyMCPTools: true,
+	fileRoot: "/tmp/a2a-bridge-test-files",
+	maxFileBytes: 1024 * 1024,
 };
 
 // Sandbox the audit log for the WHOLE file, not just the audit test: every
@@ -168,5 +171,62 @@ describe("audit log", () => {
 		expect(done).toBeDefined();
 		expect(done).toMatchObject({ isError: true });
 		expect(done?.id).toBe(start?.id);
+	});
+});
+
+function fakeBridgeTool(name: string): BridgeTool {
+	return {
+		name,
+		description: `${name} bridge tool`,
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		async execute() {
+			return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }], isError: false };
+		},
+	};
+}
+
+describe("bridge-owned tools", () => {
+	test("advertised after the host catalog when no host tool claims the name", async () => {
+		const catalog = await buildToolCatalog(makePi(["read"]), cfg, [fakeBridgeTool("a2a_file_put")])();
+		expect(catalog.map((t) => t.name)).toEqual(["read", "a2a_file_put"]);
+	});
+
+	test("a host tool with the same name wins: the bridge tool is neither listed nor callable", async () => {
+		const pi = makePi(["a2a_file_put"]);
+		const tools = [fakeBridgeTool("a2a_file_put")];
+		const catalog = await buildToolCatalog(pi, cfg, tools)();
+		expect(catalog.map((t) => t.name)).toEqual(["a2a_file_put"]);
+		// The single entry is the host tool (host schema, not the bridge's).
+		expect(catalog[0]?.description).toBe("a2a_file_put tool");
+		// Calling it goes down the host path -> absent Main session, not the bridge handler.
+		const call = buildCallTool(pi, extCtx, cfg, tools);
+		const r = await callText(call, "a2a_file_put");
+		expect(r.text).toBe("main session not available");
+	});
+
+	test("deny hides bridge tools too", async () => {
+		const tools = [fakeBridgeTool("a2a_file_put")];
+		const catalog = await buildToolCatalog(makePi([]), { ...cfg, deny: ["a2a_file_put"] }, tools)();
+		expect(catalog).toEqual([]);
+		const call = buildCallTool(makePi([]), extCtx, { ...cfg, deny: ["a2a_file_put"] }, tools);
+		const r = await call("a2a_file_put", {}, "s");
+		expect(r.isError).toBe(true);
+		expect(r.content[0]).toMatchObject({ text: "tool 'a2a_file_put' is not exposed by this bridge" });
+	});
+
+	test("oversized string args are redacted to length+hash in the audit line", async () => {
+		const payload = "A".repeat(5000);
+		const call = buildCallTool(makePi(["read"]), extCtx, cfg, [fakeBridgeTool("a2a_echo")]);
+		await call("a2a_echo", { bytes: payload }, "sess-redact");
+		const deadline = Date.now() + 3000;
+		let hit: Record<string, unknown> | undefined;
+		while (Date.now() < deadline && !hit) {
+			hit = (await readLines(auditLogPath())).find(
+				(l) => l.sid === "sess-redact" && l.phase === "start" && String(l.args).includes("<len:5000"),
+			);
+			if (!hit) await Bun.sleep(10);
+		}
+		expect(hit).toBeDefined();
+		expect(String(hit?.args)).not.toContain(payload);
 	});
 });

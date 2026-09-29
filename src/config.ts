@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
 export interface BridgeConfig {
@@ -9,6 +9,8 @@ export interface BridgeConfig {
 	host: string; // default "127.0.0.1"
 	deny: string[]; // tool names to hide
 	denyMCPTools: boolean;
+	fileRoot: string; // sandbox dir for a2a_file_* tools (absolute)
+	maxFileBytes: number; // per-file size cap for transfers
 }
 
 export function generateToken(): string {
@@ -19,11 +21,20 @@ export function configPath(env: NodeJS.ProcessEnv = process.env): string {
 	return env.A2A_BRIDGE_CONFIG || join(getAgentDir(), "a2a-bridge.json");
 }
 
-const DEFAULTS: Omit<BridgeConfig, "token"> = {
+/** Default lives beside (not inside) the agent dir: the file root must never
+ * contain the token config or the audit log. */
+export function defaultFileRoot(): string {
+	return join(dirname(getAgentDir()), "a2a-bridge-files");
+}
+
+export const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+const DEFAULTS: Omit<BridgeConfig, "token" | "fileRoot"> = {
 	port: 0,
 	host: "127.0.0.1",
 	deny: [],
 	denyMCPTools: false,
+	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
 };
 
 function fieldError(file: string, field: string, expect: string): Error {
@@ -46,7 +57,7 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 		raw = await readFile(file, "utf8");
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-			return { ...DEFAULTS, token: generateToken() };
+			return { ...DEFAULTS, fileRoot: defaultFileRoot(), token: generateToken() };
 		}
 		throw e;
 	}
@@ -60,7 +71,7 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 		throw new Error(`Invalid config at ${file}: expected a JSON object`);
 	}
 	const p = parsed as Record<string, unknown>;
-	const cfg: BridgeConfig = { ...DEFAULTS, token: generateToken() };
+	const cfg: BridgeConfig = { ...DEFAULTS, fileRoot: defaultFileRoot(), token: generateToken() };
 
 	if ("port" in p) {
 		if (typeof p.port !== "number" || !Number.isInteger(p.port) || p.port < 0 || p.port > 65535) {
@@ -85,6 +96,28 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 			throw fieldError(file, "denyMCPTools", "a boolean");
 		}
 		cfg.denyMCPTools = p.denyMCPTools;
+	}
+	if ("fileRoot" in p) {
+		if (
+			typeof p.fileRoot !== "string" ||
+			p.fileRoot.length === 0 ||
+			p.fileRoot.includes("\0") ||
+			!isAbsolute(normalize(p.fileRoot))
+		) {
+			throw fieldError(file, "fileRoot", "a non-empty absolute path");
+		}
+		cfg.fileRoot = normalize(p.fileRoot);
+	}
+	if ("maxFileBytes" in p) {
+		if (
+			typeof p.maxFileBytes !== "number" ||
+			!Number.isInteger(p.maxFileBytes) ||
+			p.maxFileBytes < 1024 ||
+			p.maxFileBytes > 1024 * 1024 * 1024
+		) {
+			throw fieldError(file, "maxFileBytes", "an integer in [1024, 1073741824]");
+		}
+		cfg.maxFileBytes = p.maxFileBytes;
 	}
 
 	if (typeof p.token === "string" && p.token.length > 0) {

@@ -19,7 +19,7 @@ const FEATURES = [
 	{
 		title: "协议参考",
 		to: "/docs/protocol",
-		description: "wire 契约：传输约定、处理顺序、会话生命周期、错误码总表。",
+		description: "wire 契约：传输约定、处理顺序、会话生命周期、桥自带文件传输工具、错误码总表。",
 		icon: (
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
 				<path d="m8 8-4 4 4 4" />
@@ -31,7 +31,7 @@ const FEATURES = [
 	{
 		title: "测试与探针",
 		to: "/docs/testing",
-		description: "单测矩阵、真实宿主 E2E、审批判别探针 VERDICT A/B/C。",
+		description: "单测矩阵、真实宿主 E2E 四件套、审批判别探针 VERDICT A/B/C。",
 		icon: (
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
 				<path d="M12 3 4.5 6v6c0 4.5 3 7.5 7.5 9 4.5-1.5 7.5-4.5 7.5-9V6L12 3Z" />
@@ -107,12 +107,16 @@ export default function Home() {
 									<span>运行时依赖</span>
 								</div>
 								<div className={styles.stat}>
-									<b>59</b>
+									<b>100</b>
 									<span>单元断言用例</span>
 								</div>
 								<div className={styles.stat}>
 									<b>29</b>
 									<span>宿主加固核验</span>
+								</div>
+								<div className={styles.stat}>
+									<b>100MB</b>
+									<span>单文件传输上限</span>
 								</div>
 							</div>
 						</div>

@@ -4,24 +4,27 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 59 pass / 0 fail（5 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 100 pass / 0 fail（7 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `bun run test:approval` | 审批边界判别探针，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
+| `bun run test:files` | 真实宿主文件传输核验，54 项 | 是 | `FILES OK` |
 
-统一前置（E2E 三件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。三者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（探针失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（E2E 四件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（探针失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-## 单测矩阵（59 用例）
+## 单测矩阵（100 用例）
 
 | 文件 | 用例数 | 覆盖 |
 | --- | --- | --- |
 | `server.test.ts` | 20 | 鉴权放置（无/错 token 401、未鉴权 DELETE 401）、initialize 固定版本与会话签发、不回显客户端版本、会话强制（缺头 400、通知缺头 400、未知 404、TTL 刷新与过期清理、上限淘汰、DELETE 204 后即失效）、tools/list 无游标、tools/call 往返与抛错仍 200、未知方法 -32601、GET 405、非法 JSON / 非法 jsonrpc / batch 均 400 |
 | `auth.test.ts` | 11 | Bearer 解析、scheme 大小写、其他 scheme 拒绝、缺失/空凭据、等长同内容/异内容、**异长不抛异常**（timing-safe 的长度前置） |
-| `config.test.ts` | 17 | 缺文件默认值、round-trip、保存 0600、未知字段忽略、坏 JSON/非对象带路径抛错、deny/port/denyMCPTools 类型非法均 fail-closed、token 缺失/非法自愈并持久、deny 精确匹配与 `mcp__` 前缀、denyMCPTools 开关、token 32B base64url 且唯一 |
-| `bridge.test.ts` | 7 | 暴露门（deny 与 `mcp__` 过滤、denyMCPTools 关、目录外交集/别名拒、无 Main 会话清晰报错）、审计（dispatch 写 start + 完成写 done 按 id 配对、被拒调用两相齐全、sid 归因） |
+| `config.test.ts` | 20 | 缺文件默认值（含 `fileRoot` 绝对、`maxFileBytes` 为 100MB）、round-trip、保存 0600、未知字段忽略、坏 JSON/非对象带路径抛错、deny/port/denyMCPTools/fileRoot/maxFileBytes 类型或区间非法均 fail-closed、token 缺失/非法自愈并持久、deny 精确匹配与 `mcp__` 前缀、denyMCPTools 开关、token 32B base64url 且唯一 |
+| `bridge.test.ts` | 11 | 暴露门（deny 与 `mcp__` 过滤、denyMCPTools 关、目录外交集/别名拒、无 Main 会话清晰报错）、审计（dispatch 写 start + 完成写 done 按 id 配对、被拒调用两相齐全、sid 归因）、桥自带工具（列在宿主工具之后、同名宿主优先且调用走宿主、deny 对 `a2a_file_*` 生效、超长参数落盘为 `<len:N,sha256:…>` 且原始载荷不出现） |
+| `fileguard.test.ts` | 16 | 路径词法（绝对/`~`/NUL/控制字符/`.`/`..` 段拒、`a..b` 放行、段长与总长上限）、祖先 realpath 后仍在根内、根内目录符号链接不得把写入引出根、根拒符号链接、根不得是配置/审计的祖先、原子写 0600 与 sha256、overwrite 语义、切片读越界/目录/symlink 拒、分块追加 |
+| `filetools.test.ts` | 18 | 六个工具的契约：内联 put/get 往返 base64 相等、eof/offset 翻页、list 隐藏 `.tmp`、分块乱序/超量/未知 transfer/跨 sid/TTL 过期（注入时钟）/重复 end、end 补建目标父目录、`maxFileBytes` 拒、`bad_base64` 检出篡改、`already_exists`/`overwrite`、schema 全 `additionalProperties:false`、chunk 不进审计而 start/end 进 |
 | `versions.test.ts` | 4 | 版本守卫：pi-* devDep 必须精确版本（无 `^`/`~`）、实装 == pin（硬断言）、两 pin 一致、`omp --version` ≠ pin 仅告警（omp 缺失时跳过） |
 
-审计断言通过 `A2A_BRIDGE_AUDIT` 沙箱化，单测不会写真实 `~/.omp`。
+审计断言通过 `A2A_BRIDGE_AUDIT` 沙箱化，文件断言通过 `cfg.fileRoot` 指向临时目录，单测不会写真实 `~/.omp`。
 
 ## `test:smoke` — 真实宿主 E2E
 
@@ -71,8 +74,28 @@
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
 
+## `test:files` — 文件传输核验（54 项）
+
+配置种子带**小 `maxFileBytes`（1MiB）**与显式 `fileRoot`：超限拒绝不必等真实 100MB。分组：
+
+| 组 | 项数 | 断言 |
+| --- | --- | --- |
+| 目录 | 6 | 六个 `a2a_file_*` 均出现在 `tools/list` |
+| 内联写 | 6 | put 成功；文件真实落盘且在 `fileRoot` 内；权限 0600；盘上字节 == 载荷；`sha256` 与文件一致；回显 `mimeType` |
+| overwrite | 2 | 重复 put 无 `overwrite` → `already_exists`；带 `overwrite` 成功 |
+| 读回 | 5 | `get` 返回与 put 相同的 base64；`eof`；`sha256` 一致；`offset` 切片正确；切片到末尾仍 `eof` |
+| list | 2 | 列出入库目录；`.tmp` 暂存目录不可见 |
+| 路径沙箱 | 8 | `../`、绝对路径、`a/../../`、`./`、内嵌 `..` 一律 `invalid_path`（词法先拒）；跨根写拒；根内**目录**符号链接引出根 → `escapes_root`（读、写各一项） |
+| 符号链接 | 3 | 根内文件符号链接读拒 `symlink_refused`、写拒 `symlink_refused`、链接目标字节未被改动 |
+| 分块上传 | 14 | `put_start` 返回 `transferId` 与可用 `chunkMaxBytes`；4 块按序接收；块数与字节覆盖自洽；重放旧 `seq` → `bad_chunk_order`；`put_end` 提交；文件落盘；大小 == `totalBytes`；字节完全重组；`sha256` 一致；重复 `end` → `unknown_transfer` |
+| 上限 | 1 | `totalBytes` 超 `maxFileBytes` → `too_large` |
+| 名字门禁 | 1 | 目录外名字在文件处理之前被拒（不产生 `a2a_file_error`） |
+| 审计 | 6 | `a2a_file_put` 有 `start`；有同 `id` 配对的 `done`；日志不含原始 base64；以 `<base64 len:N>` 形态留痕；单行 < 1.2KB（实测最长 307）；`a2a_file_put_chunk` 零逐块记录 |
+
+全过 → `FILES OK`；任何一项不过 → `FAIL: <label>` + exit 1（并打印宿主日志尾部，现场目录保留）。
+
 ## 约定
 
-- `test/*.test.ts` 被 `bun test` 自动发现；探针脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
+- `test/*.test.ts` 被 `bun test` 自动发现；探针脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts` / `file-transfer.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
 - 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计路径沙箱）。
 - 判定性结论（如审批挂起语义）必须由探针复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。

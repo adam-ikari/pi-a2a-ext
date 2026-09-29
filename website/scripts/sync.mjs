@@ -24,12 +24,14 @@ mkdirSync(CONTENT, { recursive: true });
 cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 
 // README -> intro.md
+// replaceAll, not replace: the README links to the same page more than once,
+// and a half-rewritten link is a broken link in the site build.
 const intro = readFileSync(join(REPO, "README.md"), "utf8")
 	.replace(/^# omp A2A Bridge\n/, "")
-	.replace("](docs/protocol.md)", "](./protocol.md)")
-	.replace("](docs/testing.md)", "](./testing.md)")
-	.replace("](CHANGELOG.md)", "](./changelog.md)")
-	.replace("[LICENSE](LICENSE)", "LICENSE 文件");
+	.replaceAll("](docs/protocol.md)", "](./protocol.md)")
+	.replaceAll("](docs/testing.md)", "](./testing.md)")
+	.replaceAll("](CHANGELOG.md)", "](./changelog.md)")
+	.replaceAll("[LICENSE](LICENSE)", "LICENSE 文件");
 writeFileSync(join(CONTENT, "intro.md"), `---\ntitle: 使用指南\nslug: /\n---\n\n${intro}`);
 
 // CHANGELOG -> changelog.md

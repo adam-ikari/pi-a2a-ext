@@ -77,7 +77,8 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 
 - **无 `nextCursor`**：单页返回全量（宿主 omp 客户端的分页循环在缺省游标时正常终止）。
 - `inputSchema` 为 JSON Schema 2020-12（由宿主工具的 typebox schema 经 `toolWireSchema` 导出）。
-- 内容 = 宿主会话工具注册表全集减 `deny`（含 `hidden` 工具；`denyMCPTools: true` 时排除 `mcp__` 前缀）。语义详见 README「安全与边界」。
+- 内容 = 宿主会话工具注册表全集减 `deny`（含 `hidden` 工具；`denyMCPTools: true` 时排除 `mcp__` 前缀），**后接桥自带的 `a2a_file_*` 工具**（见「桥自带工具」），同样受 `deny` 约束。语义详见 README「安全与边界」。
+- 与宿主工具同名时**宿主优先**：桥的自带工具被摘掉，宿主 stderr 打一条告警（`a2a-bridge] host tool '...' shadows`）。
 - 请求可带 `params.cursor`，被忽略。
 
 ### `tools/call`
@@ -97,6 +98,25 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 - `arguments` 原样透传给宿主工具执行（在宿主 `Main` 会话上下文中）。
 - 每次 `tools/call`（包括被拒绝的）都写一对审计记录，见 README「审计日志」。
 - `params.name` 缺失按空串处理（走向出口 2）。
+
+### 桥自带工具：文件传输
+
+桥自己贡献 6 个工具，走同一条 `tools/list` / `tools/call` 管线（因此复用鉴权、会话、`deny` 门禁与两阶段审计），线格式采用 A2A FilePart 的 `{ name, mimeType, bytes(base64) }`。所有 `path` 都相对配置项 `fileRoot`（沙箱根），**不**是宿主文件系统路径。
+
+| 工具 | 输入 | 成功返回（`content[0].text` 的 JSON） |
+| --- | --- | --- |
+| `a2a_file_put` | `path`, `file{bytes, mimeType?, name?}`, `overwrite?` | `path, bytes, sha256, mimeType` |
+| `a2a_file_put_start` | `path`, `totalBytes?`, `mimeType?`, `overwrite?` | `transferId, chunkMaxBytes` |
+| `a2a_file_put_chunk` | `transferId`, `seq`, `bytes` | `receivedBytes, nextSeq` |
+| `a2a_file_put_end` | `transferId` | `path, bytes, sha256, mimeType` |
+| `a2a_file_get` | `path`, `offset?`, `limit?` | `path, offset, bytes, totalBytes, eof, sha256` |
+| `a2a_file_list` | `path?`（默认 `.`）, `limit?`（默认 100） | `entries[{path, bytes, mtime}], truncated` |
+
+- 成功：`isError: false` + 单个 text 块 = `{"ok":true, ...}`。
+- 失败：`isError: true` + text = `a2a_file_error <code>: <message>`，`<code>` 是稳定枚举：`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch`。
+- 尺寸上限：内联与单块解码后 ≤ 512KiB（留在 1MB 请求体上限内），单次 `get` 响应 ≤ 256KiB（用 `offset`/`totalBytes`/`eof` 翻页），单文件 ≤ `maxFileBytes`（默认 100MB）。100MB 约需 200 次 `put_chunk`。
+- 分块传输状态在桥进程内，绑定签发它的 `Mcp-Session-Id`：换会话调用同一 `transferId` 得到 `unknown_transfer`（与「不存在」同文案，不泄露他人传输是否存在）。空闲 30 分钟的传输会被后续任一次文件工具调用回收（惰性清理，无定时器），并发上限 16。
+- `a2a_file_put_chunk` **不写逐块审计**（200 块会冲爆日志轮转），start/end 仍全量记录。
 
 ### `notifications/*`
 
@@ -139,3 +159,5 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 ## v1 未实现面
 
 resources、prompts、SSE 推送、调用取消、并发/速率限制、OAuth/TLS——完整边界见 README「v1 边界」。
+
+文件传输**不**走 resources，而是走 `tools/call`（见「桥自带工具」）：桥自带工具复用同一条鉴权/会话/审计管线，无需新增 JSON-RPC 方法。

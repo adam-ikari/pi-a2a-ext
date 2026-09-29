@@ -54,7 +54,18 @@ async function init(base: string, params: Record<string, unknown> = {}): Promise
 
 /** Run `fn` against a fresh server so session-map tests cannot cross-contaminate. */
 async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
-	const s = await startServer({ port: 0, host: "127.0.0.1", token: TOKEN, deny: [], denyMCPTools: false }, makeDeps());
+	const s = await startServer(
+		{
+			port: 0,
+			host: "127.0.0.1",
+			token: TOKEN,
+			deny: [],
+			denyMCPTools: false,
+			fileRoot: "/tmp/a2a-bridge-test-files",
+			maxFileBytes: 1024 * 1024,
+		},
+		makeDeps(),
+	);
 	try {
 		await fn(`http://127.0.0.1:${s.port}/`);
 	} finally {

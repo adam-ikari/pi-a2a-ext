@@ -1,18 +1,41 @@
+import { createHash } from "node:crypto";
 import { appendFile, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
 const MAX_LOG_BYTES = 512 * 1024;
 const MAX_ARGS_CHARS = 1024;
+/** Args values longer than this are payloads (base64 file bytes), not intent. */
+const MAX_VALUE_CHARS = 120;
 
 /** Audit log path: `$A2A_BRIDGE_AUDIT` or `<agentDir>/a2a-bridge.log`. */
 export function auditLogPath(env: NodeJS.ProcessEnv = process.env): string {
 	return env.A2A_BRIDGE_AUDIT || join(getAgentDir(), "a2a-bridge.log");
 }
 
+function digest(value: string): string {
+	return createHash("sha256").update(value).digest("hex").slice(0, 8);
+}
+
+/**
+ * Redact oversized string leaves (a file's base64 body) down to a length plus
+ * a short hash: the log stays a record of *what was called*, not a copy of the
+ * payload. Walks two levels deep, which is as nested as tool args get.
+ */
+function redact(value: unknown, depth = 0): unknown {
+	if (typeof value === "string") {
+		return value.length > MAX_VALUE_CHARS ? `<len:${value.length},sha256:${digest(value)}>` : value;
+	}
+	if (depth >= 2 || typeof value !== "object" || value === null) return value;
+	if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(value)) out[k] = redact(v, depth + 1);
+	return out;
+}
+
 function serializeArgs(args: unknown): string {
 	try {
-		const s = JSON.stringify(args);
+		const s = JSON.stringify(redact(args));
 		if (s === undefined) return String(args);
 		return s.length > MAX_ARGS_CHARS ? `${s.slice(0, MAX_ARGS_CHARS)}…` : s;
 	} catch {
