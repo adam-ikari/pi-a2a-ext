@@ -129,13 +129,14 @@ a2a_file_get { "path": "bulk/data.tar", "offset": 0, "limit": 262144 }  -> { "by
 a2a_file_list { "path": "inbox" }                                       -> { "entries": [...] }
 ```
 
-- 失败一律是 `isError: true` + 文本 `a2a_file_error <code>: <message>`，`<code>` 是稳定枚举（`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch`）。协议细节（分块状态绑定会话、30 分钟空闲回收、上限）见 [docs/protocol.md](docs/protocol.md)「桥自带工具」。
+- 失败一律是 `isError: true` + 文本 `a2a_file_error <code>: <message>`，`<code>` 是稳定枚举（`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch` `io_error`）。**没有裸 errno、没有宿主路径**：宿主文件系统自己报错（`ENOTDIR`/`EISDIR`/`ENOSPC` 等）归为兜底码 `io_error`，细节只进宿主 stderr。协议细节（分块重传幂等、暂存目录不可寻址、分块状态绑定会话、30 分钟空闲回收、上限）见 [docs/protocol.md](docs/protocol.md)「桥自带工具」。
+- **重传幂等**：同一个 `seq` 配同一份 `bytes` 再次到达时按已收处理（返回 `duplicate: true`），不会把文件写坏——上面说的「调用方必须自设超时」意味着超时重试是常规动作。同一 `seq` 换内容仍报 `bad_chunk_order`。
 - `deny` 对这些工具同样生效：`"deny": ["a2a_file_put", "a2a_file_put_start", "a2a_file_put_chunk", "a2a_file_put_end"]` 即可只留读、不留写。想整体关掉文件传输，把 6 个名字全 deny 掉。
 
 ## 安全与边界
 
 - **token 即工具执行全权（默认配置下）**：宿主默认 `approvalMode: yolo`，拿到 token 就可在宿主会话里直接执行任意暴露的工具（含 `bash`），不经过任何审批；只有宿主把工具配成 `prompt` 才有审批门可拦（无 UI 时见审批节）。配置文件保持 `0600`，不要进版本库。
-- **桥自带工具（文件传输）不经宿主审批门**：`a2a_file_*` 不是宿主工具，`tools.approval` 对它们无效——拿到 token 就等于拿到 `fileRoot` **内部**的读写权（这是设计取舍：换取复用同一条管线）。边界由沙箱兜住：路径拒绝绝对路径、`..`、NUL、控制字符、`.` 段；最深存在祖先做 `realpath` 后必须仍在 `fileRoot` 内；目录内符号链接既不顺着读也不顺着写（`symlink_refused`）；`fileRoot` 本身不得是符号链接，且不得是配置文件或审计日志的祖先目录（否则启动即失败）。
+- **桥自带工具（文件传输）不经宿主审批门**：`a2a_file_*` 不是宿主工具，`tools.approval` 对它们无效——拿到 token 就等于拿到 `fileRoot` **内部**的读写权（这是设计取舍：换取复用同一条管线）。边界由沙箱兜住：路径拒绝绝对路径、`..`、NUL、控制字符、`.` 段；最深存在祖先做 `realpath` 后必须仍在 `fileRoot` 内；目录内符号链接既不顺着读也不顺着写（`symlink_refused`，`a2a_file_list` 也不例外，否则会泄露根外的文件名/大小/mtime）；`fileRoot` 本身不得是符号链接，且不得是配置文件或审计日志的祖先目录（否则启动即失败）。**暂存目录 `.tmp` 不可寻址**（首段为 `.tmp` 一律 `invalid_path`）：传输虽绑定了 `Mcp-Session-Id`，但暂存字节是普通文件，若可寻址则任何客户端都能枚举他人 `transferId`、读取或改写他人的在途上传。
 - **pull 回来的字节会进远程上下文**：`a2a_file_get` 的 base64 是工具结果，会进入远程模型的会话历史。协议支持 100MB，但大二进制建议走 SSH/`scp` 旁路，别用这条通道。
 - 默认仅回环监听；真要对外暴露，防火墙自己负责。
 - **暴露语义 = 会话工具注册表全集**：`tools/list` 直接来自 `pi.getAllTools()`（即 Main 会话注册表），因此包含 `hidden` 工具、也包含宿主模型当前被禁用的工具——这不是「宿主模型当前可见集合」的镜像。需要收紧就用 `deny` / `denyMCPTools`。

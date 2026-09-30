@@ -14,7 +14,9 @@ export type FileOpCode =
 	| "bad_base64"
 	| "unknown_transfer"
 	| "bad_chunk_order"
-	| "size_mismatch";
+	| "size_mismatch"
+	/** Unanticipated host fs failure (ENOTDIR/EISDIR/ENOSPC/...); never carries a host path. */
+	| "io_error";
 
 export class FileOpError extends Error {
 	constructor(
@@ -36,6 +38,12 @@ const MAX_PATH_LEN = 512;
  * Validate a remote-supplied path as root-relative. Absolute paths, `.`/`..`
  * segments, empty/duplicate separators, NUL and control characters are all
  * rejected before any filesystem call happens. `a..b` is an ordinary name.
+ *
+ * The staging directory is also refused as a *leading* segment: transfers are
+ * bound to the Mcp-Session-Id that opened them, but the staged bytes are
+ * ordinary files, so an addressable `.tmp` would let any client enumerate
+ * in-flight transferIds and read or clobber another session's upload. A nested
+ * `.tmp` (some/dir/.tmp/x) is not the staging area and stays legal.
  */
 export function assertRelativeSegments(rel: unknown): string[] {
 	if (typeof rel !== "string" || rel.length === 0 || rel.length > MAX_PATH_LEN) {
@@ -50,6 +58,9 @@ export function assertRelativeSegments(rel: unknown): string[] {
 	for (const s of segments) {
 		if (s === "" || s === "." || s === "..") throw new FileOpError("invalid_path", `invalid path segment: '${s}'`);
 		if (s.length > MAX_SEGMENT_LEN) throw new FileOpError("invalid_path", `path segment too long: '${s}'`);
+	}
+	if (segments[0] === TMP_NAME) {
+		throw new FileOpError("invalid_path", `'${TMP_NAME}' is reserved for in-progress transfers`);
 	}
 	return segments;
 }

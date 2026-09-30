@@ -47,6 +47,11 @@ describe("assertRelativeSegments", () => {
 	test("rejects overlong segments", () => {
 		expect(() => assertRelativeSegments(`a/${"x".repeat(256)}`)).toThrow("too long");
 	});
+	test("rejects a leading .tmp (the staging area) but allows a nested one", () => {
+		expect(() => assertRelativeSegments(".tmp")).toThrow("reserved");
+		expect(() => assertRelativeSegments(".tmp/x.part")).toThrow("reserved");
+		expect(assertRelativeSegments("sub/.tmp/x")).toEqual(["sub", ".tmp", "x"]);
+	});
 });
 
 describe("resolveInRoot", () => {

@@ -107,15 +107,19 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 | --- | --- | --- |
 | `a2a_file_put` | `path`, `file{bytes, mimeType?, name?}`, `overwrite?` | `path, bytes, sha256, mimeType` |
 | `a2a_file_put_start` | `path`, `totalBytes?`, `mimeType?`, `overwrite?` | `transferId, chunkMaxBytes` |
-| `a2a_file_put_chunk` | `transferId`, `seq`, `bytes` | `receivedBytes, nextSeq` |
+| `a2a_file_put_chunk` | `transferId`, `seq`, `bytes` | `receivedBytes, nextSeq, duplicate?` |
 | `a2a_file_put_end` | `transferId` | `path, bytes, sha256, mimeType` |
 | `a2a_file_get` | `path`, `offset?`, `limit?` | `path, offset, bytes, totalBytes, eof, sha256` |
 | `a2a_file_list` | `path?`（默认 `.`）, `limit?`（默认 100） | `entries[{path, bytes, mtime}], truncated` |
 
 - 成功：`isError: false` + 单个 text 块 = `{"ok":true, ...}`。
-- 失败：`isError: true` + text = `a2a_file_error <code>: <message>`，`<code>` 是稳定枚举：`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch`。
+- 失败：`isError: true` + text = `a2a_file_error <code>: <message>`，`<code>` 是稳定枚举：`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch` `io_error`。
+  - 任何失败都带 code，**没有裸 errno**：`io_error` 是兜底码，表示宿主文件系统拒绝了该操作（`ENOTDIR`/`EISDIR`/`ENOSPC` 等），message 为固定文案、**不含宿主路径**（细节只进宿主 stderr 的 `[a2a-bridge] file tool error:`）。因此 `a2a_file_error <code>` 前缀可作为可靠的解析锚点。
+  - `a2a_file_get` 的 `sha256` 是**本次返回区间**的摘要（不是整文件），`totalBytes` 仍是整文件大小——按页校验用 `sha256`，翻页判断用 `totalBytes`/`eof`。
 - 尺寸上限：内联与单块解码后 ≤ 512KiB（留在 1MB 请求体上限内），单次 `get` 响应 ≤ 256KiB（用 `offset`/`totalBytes`/`eof` 翻页），单文件 ≤ `maxFileBytes`（默认 100MB）。100MB 约需 200 次 `put_chunk`。
 - 分块传输状态在桥进程内，绑定签发它的 `Mcp-Session-Id`：换会话调用同一 `transferId` 得到 `unknown_transfer`（与「不存在」同文案，不泄露他人传输是否存在）。空闲 30 分钟的传输会被后续任一次文件工具调用回收（惰性清理，无定时器），并发上限 16。
+- **重传是幂等的**：同一个 `seq` + 同一份 `bytes` 再次到达时按已收处理，返回当前 `receivedBytes`/`nextSeq` 并带 `duplicate: true`，不重复追加——README 要求调用方自设超时，超时重试是常规动作，不该损坏上传。同一 `seq` 换内容则是 `bad_chunk_order`。同一 transfer 的变更步骤（`put_chunk`/`put_end`）串行执行，并发同 seq 不会双写；乱序 `seq` 被拒而非被吸收。**排队中的步骤会在动手前重验 transfer 仍在册**：若期间 `put_end` 已提交并改名走暂存文件，该步骤返回 `unknown_transfer`，不会往死路径写入（那会报成功却丢字节）。因此 `put_end` 提交后再补发 `put_chunk` 一律 `unknown_transfer`。
+- **暂存目录不可寻址**：首段为 `.tmp` 的路径一律 `invalid_path`（嵌套的 `sub/.tmp/x` 合法）。否则 `a2a_file_list` 能枚举他人 `transferId`、`a2a_file_get` 能读他人暂存字节、`a2a_file_put` 能改写他人暂存文件，会话绑定形同虚设。
 - `a2a_file_put_chunk` **不写逐块审计**（200 块会冲爆日志轮转），start/end 仍全量记录。
 
 ### `notifications/*`

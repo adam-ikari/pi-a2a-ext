@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BridgeConfig } from "../src/config.ts";
@@ -177,6 +177,140 @@ describe("chunked transfer", () => {
 		expect(errText(bad)).toContain("bad_chunk_order");
 	});
 
+	// The seq check and the append must not interleave. Callers are told to
+	// impose their own timeout, so two in-flight requests for the same seq are
+	// routine; when both passed the check the file was written twice and
+	// put_end reported success over corrupted bytes.
+	test("concurrent chunks with the same seq do not double-append", async () => {
+		const api = tools();
+		const id = String(payload(await api.call("a2a_file_put_start", { path: "race.bin", totalBytes: 4 })).transferId);
+		const [a, b] = await Promise.all([
+			api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("ABCD") }),
+			api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("ABCD") }),
+		]);
+		// One commits, the other is recognized as a resend of the same bytes.
+		expect([payload(a).duplicate, payload(b).duplicate].filter(Boolean)).toHaveLength(1);
+		const end = await api.call("a2a_file_put_end", { transferId: id });
+		expect(payload(end)).toMatchObject({ ok: true, bytes: 4 });
+		expect(await readFile(join(dir, "root", "race.bin"), "utf8")).toBe("ABCD");
+	});
+
+	// Same race, wider: eight simultaneous copies of one chunk.
+	test("an 8-way concurrent same-seq burst still writes one chunk", async () => {
+		const api = tools();
+		const id = String(payload(await api.call("a2a_file_put_start", { path: "burst.bin", totalBytes: 64 })).transferId);
+		const chunk = Buffer.alloc(64, 0xcd).toString("base64");
+		const rs = await Promise.all(
+			Array.from({ length: 8 }, () => api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: chunk })),
+		);
+		expect(rs.filter((r) => payload(r).duplicate === true)).toHaveLength(7);
+		expect(payload(await api.call("a2a_file_put_end", { transferId: id }))).toMatchObject({ bytes: 64 });
+		expect((await readFile(join(dir, "root", "burst.bin"))).equals(Buffer.alloc(64, 0xcd))).toBe(true);
+	});
+
+	// Out-of-order seqs racing each other: order must still be enforced, and the
+	// duplicates must be absorbed rather than appended.
+	test("racing distinct seqs keep the file in order", async () => {
+		const api = tools();
+		const id = String(payload(await api.call("a2a_file_put_start", { path: "ooo.bin", totalBytes: 12 })).transferId);
+		const rs = await Promise.all(
+			[2, 1, 0, 0, 1, 2].map((s) =>
+				api.call("a2a_file_put_chunk", { transferId: id, seq: s, bytes: b64(String(s).repeat(4)) }),
+			),
+		);
+		const objs = rs.filter((r) => !r.isError).map(payload);
+		const accepted = objs.filter((p) => p.duplicate !== true);
+		// Each of the 3 distinct seqs is written exactly once, whatever order
+		// they arrive in: seqs seen ahead of their turn are refused outright,
+		// and only a repeat of an already-accepted seq counts as a duplicate.
+		expect(accepted.map((p) => p.nextSeq).sort()).toEqual([1, 2, 3]);
+		expect(accepted).toHaveLength(3);
+		expect(payload(await api.call("a2a_file_put_end", { transferId: id }))).toMatchObject({ bytes: 12 });
+		// The invariant that matters: in order, nothing lost, nothing doubled.
+		expect(await readFile(join(dir, "root", "ooo.bin"), "utf8")).toBe("000011112222");
+	});
+
+	// A full 100MB transfer is 200 chunks through the serialized queue; if the
+	// chain grew unboundedly or wedged, this would hang or drop bytes.
+	test("a 200-chunk transfer reassembles byte-exact and drains staging", async () => {
+		const api = tools({ maxFileBytes: 100 * 1024 * 1024 });
+		const step = 512 * 1024;
+		const n = 200;
+		const blob = Buffer.alloc(step * n, 0x5a);
+		const id = String(
+			payload(await api.call("a2a_file_put_start", { path: "huge.bin", totalBytes: blob.length })).transferId,
+		);
+		for (let s = 0; s < n; s++) {
+			const r = await api.call("a2a_file_put_chunk", {
+				transferId: id,
+				seq: s,
+				bytes: blob.subarray(s * step, (s + 1) * step).toString("base64"),
+			});
+			expect(r.isError).toBe(false);
+		}
+		expect(payload(await api.call("a2a_file_put_end", { transferId: id }))).toMatchObject({ bytes: blob.length });
+		expect((await readFile(join(dir, "root", "huge.bin"))).equals(blob)).toBe(true);
+		expect(await readdir(join(dir, "root", ".tmp")).catch(() => [])).toEqual([]);
+	}, 30_000);
+
+	test("a resent chunk is idempotent, but a reused seq with other bytes is not", async () => {
+		const api = tools();
+		const id = String(payload(await api.call("a2a_file_put_start", { path: "retry.bin", totalBytes: 8 })).transferId);
+		await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("AAAA") });
+		// Same seq, same bytes -> absorbed, transfer state unchanged.
+		expect(payload(await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("AAAA") }))).toMatchObject(
+			{
+				duplicate: true,
+				receivedBytes: 4,
+			},
+		);
+		// Same seq, different bytes -> a genuine protocol error, not absorbed.
+		expect(errText(await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("BBBB") }))).toContain(
+			"bad_chunk_order",
+		);
+		await api.call("a2a_file_put_chunk", { transferId: id, seq: 1, bytes: b64("BBBB") });
+		await api.call("a2a_file_put_end", { transferId: id });
+		expect(await readFile(join(dir, "root", "retry.bin"), "utf8")).toBe("AAAABBBB");
+	});
+
+	// requireTransfer resolves the record synchronously, but the write itself
+	// runs later on the transfer's queue. A put_end that commits in between has
+	// already renamed the staged file away, so the queued chunk used to append
+	// to a dead path: it reported ok, the bytes were silently lost, and an
+	// orphan .part file was left in the staging dir.
+	test("a chunk queued behind a committing put_end is refused, not appended", async () => {
+		const api = tools();
+		// No totalBytes: nothing else would reject the late chunk first.
+		const id = String(payload(await api.call("a2a_file_put_start", { path: "orphan.bin" })).transferId);
+		await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("AAAA") });
+		await api.call("a2a_file_put_chunk", { transferId: id, seq: 1, bytes: b64("BBBB") });
+		const [end, late] = await Promise.all([
+			api.call("a2a_file_put_end", { transferId: id }),
+			api.call("a2a_file_put_chunk", { transferId: id, seq: 2, bytes: b64("CCCC") }),
+		]);
+		expect(payload(end)).toMatchObject({ ok: true, bytes: 8 });
+		expect(errText(late)).toContain("unknown_transfer");
+		// The committed file holds only what was staged before the end.
+		expect(await readFile(join(dir, "root", "orphan.bin"), "utf8")).toBe("AAAABBBB");
+		// And no .part was resurrected on the renamed path.
+		const staged = await readdir(join(dir, "root", ".tmp")).catch(() => [] as string[]);
+		expect(staged).toEqual([]);
+	});
+
+	test("a failed step does not wedge the transfer for later chunks", async () => {
+		const api = tools();
+		const id = String(payload(await api.call("a2a_file_put_start", { path: "wedge.bin", totalBytes: 4 })).transferId);
+		// Over the declared size: fails, and must not poison the queue.
+		expect(errText(await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("toolarge") }))).toContain(
+			"size_mismatch",
+		);
+		expect(payload(await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("ABCD") }))).toMatchObject(
+			{
+				ok: true,
+			},
+		);
+	});
+
 	test("end without any chunk, and size mismatch, are refused", async () => {
 		const api = tools();
 		const id = String(payload(await api.call("a2a_file_put_start", { path: "empty.bin", totalBytes: 10 })).transferId);
@@ -227,6 +361,112 @@ describe("a2a_file_list", () => {
 		expect(entries.find((e) => e.path === "l/one.txt")?.bytes).toBe(5);
 		const rootList = payload(await api.call("a2a_file_list", {})).entries as Array<Record<string, unknown>>;
 		expect(rootList.some((e) => e.path === ".tmp")).toBe(false);
+	});
+
+	// Only the *children* were symlink-filtered, so a symlinked target was
+	// traversed and its names/sizes/mtimes leaked from outside the root.
+	test("refuses to list through a symlinked directory", async () => {
+		const api = tools();
+		const outside = join(dir, "outside-list");
+		await mkdir(outside, { recursive: true });
+		await writeFile(join(outside, "LEAKED.txt"), "secret");
+		await symlink(outside, join(dir, "root", "linkdir"));
+		const r = await api.call("a2a_file_list", { path: "linkdir" });
+		expect(r.isError).toBe(true);
+		expect(errText(r)).toContain("symlink_refused");
+	});
+});
+
+describe("staging directory is not addressable", () => {
+	// Transfers are bound to the Mcp-Session-Id that opened them, but the staged
+	// bytes are plain files. If `.tmp` were reachable, any client could list
+	// in-flight transferIds and read or clobber another session's upload.
+	test("a leading .tmp segment is refused by every tool", async () => {
+		const api = tools();
+		await api.call("a2a_file_put", { path: "seed.bin", file: { bytes: b64("s") } });
+		const staged = join(dir, "root", ".tmp", "someone-elses.part");
+		await writeFile(staged, "in flight");
+		for (const [tool, args] of [
+			["a2a_file_list", { path: ".tmp" }],
+			["a2a_file_get", { path: ".tmp/someone-elses.part" }],
+			["a2a_file_put", { path: ".tmp/x", file: { bytes: b64("x") } }],
+			["a2a_file_get", { path: ".tmp/../seed.bin" }],
+		] as const) {
+			const r = await api.call(tool, args, "attacker");
+			expect(r.isError).toBe(true);
+			expect(errText(r)).toContain("invalid_path");
+		}
+		// A nested .tmp is not the staging area and stays legal.
+		expect(
+			payload(await api.call("a2a_file_put", { path: "sub/.tmp/ok.txt", file: { bytes: b64("k") } })),
+		).toMatchObject({
+			ok: true,
+		});
+	});
+
+	test("another session's staged bytes cannot be overwritten", async () => {
+		const api = tools();
+		const id = String(
+			payload(await api.call("a2a_file_put_start", { path: "owned.bin", totalBytes: 4 }, "owner")).transferId,
+		);
+		await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("WXYZ") }, "owner");
+		const clobber = await api.call(
+			"a2a_file_put",
+			{ path: `.tmp/${id}.part`, overwrite: true, file: { bytes: b64("0000") } },
+			"attacker",
+		);
+		expect(clobber.isError).toBe(true);
+		expect(await readFile(join(dir, "root", ".tmp", `${id}.part`), "utf8")).toBe("WXYZ");
+	});
+});
+
+describe("error contract", () => {
+	// Raw fs errors used to reach the wire verbatim: no a2a_file_error code and
+	// absolute host paths in the message.
+	test("untranslated host fs errors are coded and path-free", async () => {
+		const api = tools();
+		await api.call("a2a_file_put", { path: "plainfile", file: { bytes: b64("hello") } });
+		for (const [tool, args] of [
+			["a2a_file_get", { path: "plainfile/child" }],
+			["a2a_file_put", { path: "plainfile/child", file: { bytes: b64("z") } }],
+			["a2a_file_list", { path: "plainfile/child" }],
+		] as const) {
+			const r = await api.call(tool, args);
+			expect(r.isError).toBe(true);
+			const text = errText(r);
+			expect(text).toMatch(/^a2a_file_error [a-z_]+: /);
+			// No host path, no errno, no absolute temp dir.
+			expect(text).not.toContain(dir);
+			expect(text).not.toMatch(/ENOTDIR|EISDIR|ENOENT|node:fs/);
+		}
+	});
+
+	test("put_end onto a directory is refused as is_a_directory", async () => {
+		const api = tools();
+		// put_start validates while the target is a file; it becomes a directory
+		// before the transfer ends. The rename must still fail closed, and with a
+		// code rather than a raw EISDIR carrying host paths.
+		await api.call("a2a_file_put", { path: "dir-target", file: { bytes: b64("old") } });
+		const id = String(
+			payload(await api.call("a2a_file_put_start", { path: "dir-target", totalBytes: 4, overwrite: true })).transferId,
+		);
+		await api.call("a2a_file_put_chunk", { transferId: id, seq: 0, bytes: b64("ABCD") });
+		await rm(join(dir, "root", "dir-target"));
+		await mkdir(join(dir, "root", "dir-target"));
+		const r = await api.call("a2a_file_put_end", { transferId: id });
+		expect(errText(r)).toContain("is_a_directory");
+		expect(errText(r)).not.toContain(dir);
+	});
+});
+
+describe("a2a_file_get digest", () => {
+	test("sha256 covers the returned slice, not the whole file", async () => {
+		const api = tools();
+		await api.call("a2a_file_put", { path: "digest.bin", file: { bytes: b64("0123456789") } });
+		const r = payload(await api.call("a2a_file_get", { path: "digest.bin", offset: 2, limit: 3 }));
+		expect(r.sha256).toBe(createHash("sha256").update("234").digest("hex"));
+		// totalBytes still describes the whole file, so paging is unaffected.
+		expect(r.totalBytes).toBe(10);
 	});
 });
 

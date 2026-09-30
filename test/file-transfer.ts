@@ -15,6 +15,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	openSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -248,6 +249,53 @@ try {
 		"get offset returns the sliced tail",
 	);
 	check(getOffset?.eof === true, "offset get to the end reports eof");
+	// sha256 covers the returned slice, not the whole file (re-hashing per page
+	// made a 100MB download cost 30s of hashing for 400 pages of 256KB).
+	const paged = okPayload(await rawCall("a2a_file_get", { path: "inbox/hello.txt", offset: 2, limit: 4 }));
+	check(paged?.sha256 === sha(putBuf.subarray(2, 6)), "paged get sha256 covers the returned slice, not the whole file");
+	check(paged?.totalBytes === putBuf.length, "paged get still reports the whole-file size");
+
+	// --- the staging dir is not addressable ---
+	// Transfers bind to Mcp-Session-Id, but staged bytes are plain files; an
+	// addressable .tmp lets any client enumerate, read or clobber them.
+	check(errorCode(await rawCall("a2a_file_list", { path: ".tmp" })) === "invalid_path", "list('.tmp') is refused");
+	check(
+		errorCode(await rawCall("a2a_file_get", { path: ".tmp/whatever.part" })) === "invalid_path",
+		"get into .tmp is refused",
+	);
+	check(
+		errorCode(await rawCall("a2a_file_put", { path: ".tmp/x", file: { bytes: inline } })) === "invalid_path",
+		"put into .tmp is refused",
+	);
+	check(
+		okPayload(await rawCall("a2a_file_put", { path: "nested/.tmp/ok.txt", file: { bytes: inline } })) !== undefined,
+		"a nested .tmp is still a legal path",
+	);
+
+	// --- untranslated host fs errors keep the code contract ---
+	// ENOTDIR (a parent component is a file) used to reach the wire as a bare
+	// errno plus the host's absolute path.
+	const notdir = errorText(await rawCall("a2a_file_get", { path: "inbox/hello.txt/child" }));
+	check(
+		errorCode(await rawCall("a2a_file_get", { path: "inbox/hello.txt/child" })) === "io_error",
+		"a parent-that-is-a-file read -> io_error",
+	);
+	check(
+		!notdir.includes(tmp) && !/ENOTDIR|node:fs/.test(notdir),
+		"the io_error message carries no host path and no raw errno",
+	);
+
+	// --- list must not traverse a symlinked directory (metadata leak) ---
+	// Only the children were symlink-filtered, so the target itself was walked
+	// and its names/sizes/mtimes leaked from outside the root.
+	const listOutside = join(tmp, "outside-for-list");
+	mkdirSync(listOutside, { recursive: true });
+	writeFileSync(join(listOutside, "LEAKED.txt"), "NOT-YOURS\n");
+	symlinkSync(listOutside, join(fileRoot, "dirlink2"));
+	check(
+		errorCode(await rawCall("a2a_file_list", { path: "dirlink2" })) === "symlink_refused",
+		"list through a directory symlink is refused",
+	);
 
 	// --- list hides the staging dir ---
 	const listed = okPayload(await rawCall("a2a_file_list", { path: "." }));
@@ -336,7 +384,24 @@ try {
 	check(seq === Math.ceil(total / step), `${seq} chunks covering ${total} bytes`);
 	check(
 		errorCode(await rawCall("a2a_file_put_chunk", { transferId, seq: 0, bytes: b64("late") })) === "bad_chunk_order",
-		"replayed chunk -> bad_chunk_order",
+		"replayed chunk with different bytes -> bad_chunk_order",
+	);
+	// A genuine retry (same seq, same bytes) is what a client does after the
+	// timeout the README tells it to impose. It must be absorbed, not appended.
+	const retry = okPayload(
+		await rawCall("a2a_file_put_chunk", {
+			transferId,
+			seq: 0,
+			bytes: blob.subarray(0, step).toString("base64"),
+		}),
+	);
+	check(retry?.duplicate === true, "resent chunk (same seq, same bytes) is absorbed as a duplicate");
+	// All `total` bytes are already staged, so a further chunk is refused. The
+	// declared total is what trips first here, hence size_mismatch rather than
+	// bad_chunk_order (seq itself is in order).
+	check(
+		errorCode(await rawCall("a2a_file_put_chunk", { transferId, seq, bytes: b64("nope") })) === "size_mismatch",
+		"a chunk past the declared total is refused",
 	);
 	const end = okPayload(await rawCall("a2a_file_put_end", { transferId }));
 	check(!!end, "put_end commits the transfer");
@@ -350,6 +415,58 @@ try {
 		errorCode(await rawCall("a2a_file_put_end", { transferId })) === "unknown_transfer",
 		"second put_end -> unknown_transfer",
 	);
+
+	// --- concurrent duplicate seq must not double-append ---
+	// The seq check and the append used to be separated by an await, so two
+	// in-flight requests carrying the same seq both passed and both wrote. This
+	// is the shape a retrying client produces, since callers are told to impose
+	// their own timeout. Run it over real HTTP so the race is genuine.
+	const raceId = String(okPayload(await rawCall("a2a_file_put_start", { path: "bulk/race.bin" }))?.transferId);
+	const raceBytes = Buffer.alloc(64, 0xcd).toString("base64");
+	const raced = await Promise.all([
+		rawCall("a2a_file_put_chunk", { transferId: raceId, seq: 0, bytes: raceBytes }),
+		rawCall("a2a_file_put_chunk", { transferId: raceId, seq: 0, bytes: raceBytes }),
+	]);
+	const duplicates = raced.filter((r) => okPayload(r)?.duplicate === true).length;
+	check(duplicates === 1, `two concurrent same-seq chunks: exactly one is a duplicate (${duplicates})`);
+	const raceEnd = okPayload(await rawCall("a2a_file_put_end", { transferId: raceId }));
+	check(raceEnd?.bytes === 64, `concurrent same-seq put_end commits exactly 64 bytes (${raceEnd?.bytes})`);
+	check(
+		readFileSync(join(fileRoot, "bulk", "race.bin")).equals(Buffer.alloc(64, 0xcd)),
+		"the raced file holds one copy of the chunk, not two",
+	);
+
+	// --- a chunk queued behind a committing put_end ---
+	// Serializing the transfer's mutating steps introduced a second race:
+	// requireTransfer resolves the record synchronously but the append runs
+	// later on the queue, so a put_end committing in between has already
+	// renamed the staged file away. The queued chunk then appended to a dead
+	// path — appendFile recreated it, the call reported ok, the bytes were
+	// silently lost, and an orphan .part was left in the staging dir.
+	// No totalBytes here, so nothing else rejects the late chunk first.
+	const orphanId = String(okPayload(await rawCall("a2a_file_put_start", { path: "bulk/orphan.bin" }))?.transferId);
+	for (const [seq, part] of ["AAAA", "BBBB"].entries()) {
+		await rawCall("a2a_file_put_chunk", { transferId: orphanId, seq, bytes: b64(part) });
+	}
+	const [orphanEnd, orphanLate] = await Promise.all([
+		rawCall("a2a_file_put_end", { transferId: orphanId }),
+		rawCall("a2a_file_put_chunk", { transferId: orphanId, seq: 2, bytes: b64("CCCC") }),
+	]);
+	const orphanEndOk = okPayload(orphanEnd);
+	const orphanLateCode = errorCode(orphanLate);
+	// Either the end won the queue (late chunk refused) or the chunk landed
+	// first (it is a real write and the end then commits 12 bytes). What must
+	// never happen is ok + bytes lost + an orphan left behind.
+	if (orphanEndOk?.bytes === 8) {
+		check(orphanLateCode === "unknown_transfer", "a chunk queued behind a committed put_end -> unknown_transfer");
+	} else {
+		check(orphanEndOk?.bytes === 12, `put_end commits every accepted byte (${orphanEndOk?.bytes})`);
+	}
+	const orphanBytes = readFileSync(join(fileRoot, "bulk", "orphan.bin")).toString();
+	const expectedOrphan = orphanEndOk?.bytes === 8 ? "AAAABBBB" : "AAAABBBBCCCC";
+	check(orphanBytes === expectedOrphan, `committed bytes match what was acknowledged (${JSON.stringify(orphanBytes)})`);
+	const stagedLeft = existsSync(join(fileRoot, ".tmp")) ? readdirSync(join(fileRoot, ".tmp")) : [];
+	check(stagedLeft.length === 0, `no orphan .part left in the staging dir (${JSON.stringify(stagedLeft)})`);
 
 	// --- size cap ---
 	check(

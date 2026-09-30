@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { BridgeConfig } from "./config.ts";
@@ -57,7 +57,14 @@ function fail(code: string, message: string): { content: McpContent[]; isError: 
 	return { content: [{ type: "text", text: `a2a_file_error ${code}: ${message}` }], isError: true };
 }
 
-/** A tool call never throws: FileOpError becomes an isError wire result. */
+/**
+ * A tool call never surfaces a raw error. `FileOpError` becomes an isError
+ * wire result with its stable code; anything else is an unanticipated host fs
+ * failure (ENOTDIR, EISDIR, ENOSPC, ...) whose message embeds absolute host
+ * paths. Those are re-reported under a generic code with a path-free message:
+ * the contract is `a2a_file_error <code>`, and a token holder learns nothing
+ * about the host filesystem beyond what the sandbox already implies.
+ */
 function guarded(
 	fn: (args: unknown, sid: string | null) => Promise<{ content: McpContent[]; isError: boolean }>,
 ): (args: unknown, sid: string | null) => Promise<{ content: McpContent[]; isError: boolean }> {
@@ -66,7 +73,8 @@ function guarded(
 			return await fn(args, sid);
 		} catch (e) {
 			if (e instanceof FileOpError) return fail(e.code, e.message);
-			throw e;
+			console.error("[a2a-bridge] file tool error:", e);
+			return fail("io_error", "the host filesystem rejected the operation");
 		}
 	};
 }
@@ -127,6 +135,8 @@ function bytesAuditView(args: Record<string, unknown>): Record<string, unknown> 
 }
 
 interface Transfer {
+	/** Its own map key, so a queued step can confirm it is still the live record. */
+	id: string;
 	sid: string | null;
 	rel: string;
 	partPath: string;
@@ -136,6 +146,28 @@ interface Transfer {
 	mimeType?: string;
 	overwrite: boolean;
 	lastSeenMs: number;
+	/**
+	 * Serializes this transfer's mutating steps. The seq check and the append
+	 * must not interleave: two concurrent requests carrying the same seq would
+	 * both pass the check and both append, doubling the bytes on disk.
+	 */
+	queue: Promise<unknown>;
+	/** Digest per accepted seq, so a resent chunk is absorbed, not appended twice. */
+	seqDigests: Map<number, string>;
+}
+
+/**
+ * Run one mutating step of a transfer with exclusive access to it. The chain
+ * is kept alive across rejections, so a failed step cannot wedge the transfer
+ * for every later caller.
+ */
+function serialize<T>(tr: Transfer, fn: () => Promise<T>): Promise<T> {
+	const run = tr.queue.then(fn, fn);
+	tr.queue = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
 }
 
 /**
@@ -198,6 +230,17 @@ export function buildFileTools(
 		return tr;
 	}
 
+	/**
+	 * Re-check liveness *inside* the serialized step. `requireTransfer` resolves
+	 * the record synchronously, but the mutation itself runs later on the
+	 * transfer's queue: a put_end that commits in between has already renamed
+	 * the staged file away, so appending would recreate a dead `.part` path,
+	 * report success, and lose the bytes.
+	 */
+	function requireLive(tr: Transfer): void {
+		if (transfers.get(String(tr.id)) !== tr) throw new FileOpError("unknown_transfer");
+	}
+
 	const put: BridgeTool = {
 		name: "a2a_file_put",
 		description:
@@ -243,6 +286,7 @@ export function buildFileTools(
 			const id = randomUUID();
 			const partPath = join(root, TMP_NAME, `${id}.part`);
 			transfers.set(id, {
+				id,
 				sid,
 				rel: path,
 				partPath,
@@ -252,6 +296,8 @@ export function buildFileTools(
 				mimeType: optStr(a, "mimeType"),
 				overwrite: optBool(a, "overwrite"),
 				lastSeenMs: now(),
+				queue: Promise.resolve(),
+				seqDigests: new Map(),
 			});
 			return ok({ transferId: id, path, chunkMaxBytes: CHUNK_MAX_BYTES });
 		},
@@ -269,23 +315,42 @@ export function buildFileTools(
 		async execute(args, sid) {
 			const a = (args ?? {}) as Record<string, unknown>;
 			const tr = requireTransfer(a.transferId, sid);
-			const seq = optInt(a, "seq");
-			if (seq === undefined || seq !== tr.expectedSeq) {
-				throw new FileOpError("bad_chunk_order", `expected seq ${tr.expectedSeq}, got ${String(a.seq)}`);
-			}
 			if (typeof a.bytes !== "string") badArgs("'bytes' must be a base64 string");
+			// Decode and digest before taking the lock: both are pure, and the
+			// digest is what makes a resent chunk recognizable below.
 			const data = decodeBase64(a.bytes, CHUNK_MAX_BYTES);
-			if (tr.received + data.byteLength > cfg.maxFileBytes) {
-				throw new FileOpError("too_large", `transfer exceeds maxFileBytes (${cfg.maxFileBytes})`);
-			}
-			if (tr.totalBytes !== undefined && tr.received + data.byteLength > tr.totalBytes) {
-				throw new FileOpError("size_mismatch", `more bytes than declared totalBytes (${tr.totalBytes})`);
-			}
-			await appendPart(tr.partPath, data);
-			tr.expectedSeq += 1;
-			tr.received += data.byteLength;
-			tr.lastSeenMs = now();
-			return ok({ receivedBytes: tr.received, nextSeq: tr.expectedSeq });
+			const digest = createHash("sha256").update(data).digest("hex");
+			return serialize(tr, async () => {
+				// A put_end queued ahead of us may have committed and renamed the
+				// staged file away; appending now would resurrect a dead path.
+				requireLive(tr);
+				const seq = optInt(a, "seq");
+				// Resending an already-accepted chunk is what a retrying client
+				// does after a timeout — and the README tells callers to impose
+				// their own timeout, so it is an expected move, not an attack.
+				// Answer from the recorded digest instead of appending twice.
+				if (seq !== undefined && seq < tr.expectedSeq) {
+					if (tr.seqDigests.get(seq) === digest) {
+						return ok({ receivedBytes: tr.received, nextSeq: tr.expectedSeq, duplicate: true });
+					}
+					throw new FileOpError("bad_chunk_order", `seq ${seq} was already accepted with different bytes`);
+				}
+				if (seq === undefined || seq !== tr.expectedSeq) {
+					throw new FileOpError("bad_chunk_order", `expected seq ${tr.expectedSeq}, got ${String(a.seq)}`);
+				}
+				if (tr.received + data.byteLength > cfg.maxFileBytes) {
+					throw new FileOpError("too_large", `transfer exceeds maxFileBytes (${cfg.maxFileBytes})`);
+				}
+				if (tr.totalBytes !== undefined && tr.received + data.byteLength > tr.totalBytes) {
+					throw new FileOpError("size_mismatch", `more bytes than declared totalBytes (${tr.totalBytes})`);
+				}
+				await appendPart(tr.partPath, data);
+				tr.seqDigests.set(seq, digest);
+				tr.expectedSeq = seq + 1;
+				tr.received += data.byteLength;
+				tr.lastSeenMs = now();
+				return ok({ receivedBytes: tr.received, nextSeq: tr.expectedSeq });
+			});
 		},
 	};
 
@@ -297,22 +362,29 @@ export function buildFileTools(
 			const a = (args ?? {}) as Record<string, unknown>;
 			const id = a.transferId;
 			const tr = requireTransfer(id, sid);
-			if (tr.expectedSeq === 0) throw new FileOpError("size_mismatch", "no chunks were sent");
-			if (tr.totalBytes !== undefined && tr.received !== tr.totalBytes) {
-				throw new FileOpError("size_mismatch", `received ${tr.received} of ${tr.totalBytes} declared bytes`);
-			}
-			const root = await rootReal();
-			const abs = await resolveInRoot(root, tr.rel);
-			const existing = await lstat(abs).catch(() => null);
-			if (existing?.isSymbolicLink()) throw new FileOpError("symlink_refused", "destination is a symlink");
-			if (existing && !tr.overwrite) throw new FileOpError("already_exists", "file exists; pass overwrite to replace");
-			// The transfer staged in .tmp; the destination's parent may not exist
-			// yet (put_start only validates the path). abs is containment-checked.
-			await mkdir(dirname(abs), { recursive: true, mode: 0o700 });
-			await rename(tr.partPath, abs);
-			transfers.delete(String(id));
-			const r = await stat(abs);
-			return ok({ path: tr.rel, bytes: r.size, sha256: await sha256File(abs), mimeType: tr.mimeType ?? null });
+			// Finalizing races an in-flight chunk like any other mutation: take
+			// the same lock so a late chunk cannot land after the rename.
+			return serialize(tr, async () => {
+				requireLive(tr);
+				if (tr.expectedSeq === 0) throw new FileOpError("size_mismatch", "no chunks were sent");
+				if (tr.totalBytes !== undefined && tr.received !== tr.totalBytes) {
+					throw new FileOpError("size_mismatch", `received ${tr.received} of ${tr.totalBytes} declared bytes`);
+				}
+				const root = await rootReal();
+				const abs = await resolveInRoot(root, tr.rel);
+				const existing = await lstat(abs).catch(() => null);
+				if (existing?.isSymbolicLink()) throw new FileOpError("symlink_refused", "destination is a symlink");
+				if (existing?.isDirectory()) throw new FileOpError("is_a_directory", "destination is a directory");
+				if (existing && !tr.overwrite)
+					throw new FileOpError("already_exists", "file exists; pass overwrite to replace");
+				// The transfer staged in .tmp; the destination's parent may not exist
+				// yet (put_start only validates the path). abs is containment-checked.
+				await mkdir(dirname(abs), { recursive: true, mode: 0o700 });
+				await rename(tr.partPath, abs);
+				transfers.delete(String(id));
+				const r = await stat(abs);
+				return ok({ path: tr.rel, bytes: r.size, sha256: await sha256File(abs), mimeType: tr.mimeType ?? null });
+			});
 		},
 	};
 
@@ -320,7 +392,7 @@ export function buildFileTools(
 		name: "a2a_file_get",
 		description:
 			`Read a file from the bridge's file root as base64 (A2A FilePart shape). Responses are capped at ${GET_MAX_BYTES} bytes; ` +
-			"page larger files with offset/limit using the returned totalBytes and eof flag.",
+			"page larger files with offset/limit using the returned totalBytes and eof flag. sha256 covers the returned bytes only.",
 		inputSchema: OBJECT({ path: STR, offset: INT, limit: INT }, ["path"]),
 		async execute(args, _sid) {
 			const a = (args ?? {}) as Record<string, unknown>;
@@ -328,16 +400,17 @@ export function buildFileTools(
 			const offset = optInt(a, "offset") ?? 0;
 			const limit = optInt(a, "limit");
 			const root = await rootReal();
-			const abs = await resolveInRoot(root, path);
 			const { buf, total } = await readSlice(root, path, offset, Math.min(limit ?? GET_MAX_BYTES, GET_MAX_BYTES));
-			const sha = await sha256File(abs);
 			return ok({
 				path,
 				offset,
 				bytes: buf.toString("base64"),
 				totalBytes: total,
 				eof: offset + buf.byteLength >= total,
-				sha256: sha,
+				// Digest of the slice just read, not of the whole file: re-hashing
+				// per page would make reading an N-byte file cost O(N^2/limit) and
+				// stall the bridge on exactly the large transfers it advertises.
+				sha256: createHash("sha256").update(buf).digest("hex"),
 			});
 		},
 	};
@@ -352,8 +425,11 @@ export function buildFileTools(
 			const limit = optInt(a, "limit") ?? 100;
 			const root = await rootReal();
 			const abs = rel === "." ? root : await resolveInRoot(root, rel);
-			const st = await stat(abs).catch(() => null);
+			// lstat, not stat: a symlinked directory must not be traversed, or the
+			// listing would disclose names/sizes/mtimes from outside the root.
+			const st = await lstat(abs).catch(() => null);
 			if (!st) throw new FileOpError("not_found");
+			if (st.isSymbolicLink()) throw new FileOpError("symlink_refused", "refusing to list through a symlink");
 			if (!st.isDirectory()) throw new FileOpError("is_a_directory", "path is a file, use a2a_file_get");
 			const names = (await readdir(abs)).filter((n) => !(rel === "." && n === TMP_NAME));
 			const entries: { path: string; bytes: number; mtime: string }[] = [];

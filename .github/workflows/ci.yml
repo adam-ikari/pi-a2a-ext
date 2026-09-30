@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      # Frozen by default under CI, so a package.json pin that disagrees with
+      # bun.lock fails here instead of surfacing later as a drifted
+      # node_modules. The "pin == host omp" invariant has broken three times;
+      # this is the gate that stops the fourth.
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun run lint
+      # Includes test/versions.test.ts, which hard-asserts installed == pin.
+      # The host-omp comparison inside it warns only (no omp on CI runners).
+      - run: bun test

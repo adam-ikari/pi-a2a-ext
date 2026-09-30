@@ -8,7 +8,7 @@
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `bun run test:approval` | 审批边界判别探针，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:files` | 真实宿主文件传输核验，54 项 | 是 | `FILES OK` |
+| `bun run test:files` | 真实宿主文件传输核验，71 项 | 是 | `FILES OK` |
 
 统一前置（E2E 四件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（探针失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
@@ -74,7 +74,7 @@
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
 
-## `test:files` — 文件传输核验（54 项）
+## `test:files` — 文件传输核验（71 项）
 
 配置种子带**小 `maxFileBytes`（1MiB）**与显式 `fileRoot`：超限拒绝不必等真实 100MB。分组：
 
@@ -83,11 +83,14 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 | 目录 | 6 | 六个 `a2a_file_*` 均出现在 `tools/list` |
 | 内联写 | 6 | put 成功；文件真实落盘且在 `fileRoot` 内；权限 0600；盘上字节 == 载荷；`sha256` 与文件一致；回显 `mimeType` |
 | overwrite | 2 | 重复 put 无 `overwrite` → `already_exists`；带 `overwrite` 成功 |
-| 读回 | 5 | `get` 返回与 put 相同的 base64；`eof`；`sha256` 一致；`offset` 切片正确；切片到末尾仍 `eof` |
-| list | 2 | 列出入库目录；`.tmp` 暂存目录不可见 |
+| 读回 | 7 | `get` 返回与 put 相同的 base64；`eof`；`sha256` 一致；`offset` 切片正确；切片到末尾仍 `eof`；**分页 `sha256` 只覆盖返回区间**（不是整文件）；分页时 `totalBytes` 仍为整文件大小 |
+| list | 3 | 列出入库目录；`.tmp` 暂存目录不可见；**经目录符号链接列举被拒** `symlink_refused` |
+| 暂存不可寻址 | 4 | `list`/`get`/`put` 指向 `.tmp` 一律 `invalid_path`；嵌套 `nested/.tmp/x` 仍合法 |
+| 错误契约 | 2 | 父级是文件的读 → 兜底码 `io_error`；message 不含宿主路径与裸 errno |
 | 路径沙箱 | 8 | `../`、绝对路径、`a/../../`、`./`、内嵌 `..` 一律 `invalid_path`（词法先拒）；跨根写拒；根内**目录**符号链接引出根 → `escapes_root`（读、写各一项） |
 | 符号链接 | 3 | 根内文件符号链接读拒 `symlink_refused`、写拒 `symlink_refused`、链接目标字节未被改动 |
-| 分块上传 | 14 | `put_start` 返回 `transferId` 与可用 `chunkMaxBytes`；4 块按序接收；块数与字节覆盖自洽；重放旧 `seq` → `bad_chunk_order`；`put_end` 提交；文件落盘；大小 == `totalBytes`；字节完全重组；`sha256` 一致；重复 `end` → `unknown_transfer` |
+| 分块上传 | 16 | `put_start` 返回 `transferId` 与可用 `chunkMaxBytes`；4 块按序接收；块数与字节覆盖自洽；重放旧 `seq` 且**内容不同** → `bad_chunk_order`；**重发同 `seq` 同内容 → 幂等吸收**（`duplicate: true`）；超 `totalBytes` 的块 → `size_mismatch`；`put_end` 提交；文件落盘；大小 == `totalBytes`；字节完全重组；`sha256` 一致；重复 `end` → `unknown_transfer` |
+| 并发 | 6 | 两个同 `seq` 请求并发：恰好一个标 `duplicate`，`put_end` 只提交一份，磁盘上只有一份内容；**排队中的 `put_chunk` 撞上已提交的 `put_end`** → 无论谁先到，已提交字节都与被确认的量一致，且 `.tmp` **不留孤儿 `.part`** |
 | 上限 | 1 | `totalBytes` 超 `maxFileBytes` → `too_large` |
 | 名字门禁 | 1 | 目录外名字在文件处理之前被拒（不产生 `a2a_file_error`） |
 | 审计 | 6 | `a2a_file_put` 有 `start`；有同 `id` 配对的 `done`；日志不含原始 base64；以 `<base64 len:N>` 形态留痕；单行 < 1.2KB（实测最长 307）；`a2a_file_put_chunk` 零逐块记录 |
