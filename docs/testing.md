@@ -4,15 +4,39 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 100 pass / 0 fail（7 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 114 pass / 0 fail（7 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `bun run test:approval` | 审批边界判别探针，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:files` | 真实宿主文件传输核验，71 项 | 是 | `FILES OK` |
+| `bun run test:install` | 跨机器安装核验，26 项 | 是 | `INSTALL OK` |
 
-统一前置（E2E 四件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（探针失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（E2E 五件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。前四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（探针失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-## 单测矩阵（100 用例）
+## `test:install` — 跨机器安装核验（26 项）
+
+**唯一验证「任意机器可装」的探针**。`test:files` 自己把扩展软链进沙箱 agentDir，证明桥可用，但完全不碰安装链路；本探针走 `omp install <git-url>` 的真实路径。
+
+用独立 `HOME` 模拟另一台机器（除 `models.yml` 外一无所有），分组：
+
+| 组 | 项数 | 断言 |
+| --- | --- | --- |
+| 安装 | 5 | 装进新机器的插件目录；manifest 带 `version`（否则 omp 显示 `@undefined`）；manifest 声明 `pi.extensions`（加载开关）；包内含 `src/` 与 `extensions/`（入口 import 的是 `../src/*.ts`，缺一则装上也起不来） |
+| 启动 | 4 | 宿主广播桥地址与文件传输；首次启动自建 config 与该机器专属 token |
+| MCP 握手 | 4 | HTTP `initialize` 成功并签发会话；协商 2025-11-25；广播的 URL 正是远程客户端要连的那个；`tools/list` 含 6 个桥文件工具与宿主工具 |
+| 文件往返 | 3 | `a2a_file_put` 成功；`get` 回读字节一致；`list` 能看到 |
+| 沙箱边界 | 4 | `.tmp` 不可寻址；宿主 fs 错误带 code；不泄露宿主路径；并发同 seq 只写一份 |
+| 鉴权 | 2 | 无 token → 401；无会话头 → 400 |
+| 审计 | 4 | 该机器上生成审计日志；start/done 配对；记录带 `sid`；不含原始 base64 |
+
+默认装 `https://github.com/adam-ikari/pi-a2a-ext.git`，可用 `A2A_INSTALL_SPEC` 换成本地路径或 `.` 以测开发态。全过 → `INSTALL OK`；任何一项不过 → `FAIL: <label>` + exit 1。
+
+**写这个探针时踩的两个坑（均为 harness 自身缺陷，非产品缺陷，但会让探针给出假阴性）**：
+
+- `omp --mode rpc --print "<prompt>"` 跑完一轮即退出，**桥随之消失**，远程调用得到 `ConnectionRefused`。须用 `omp --mode rpc` 不传 prompt、stdin 保持打开。
+- 以 `proc.exitCode === null` 作轮询条件，会在最后一个 stdout 分片送达前提前退出，把「桥正常」误报为「桥没起来」。**最终改为直接 HTTP 探测**（真实客户端的做法），不再刮 stdout——`test:files` 一直是这么做的，所以没踩到。
+
+## 单测矩阵（114 用例）
 
 | 文件 | 用例数 | 覆盖 |
 | --- | --- | --- |
@@ -20,8 +44,8 @@
 | `auth.test.ts` | 11 | Bearer 解析、scheme 大小写、其他 scheme 拒绝、缺失/空凭据、等长同内容/异内容、**异长不抛异常**（timing-safe 的长度前置） |
 | `config.test.ts` | 20 | 缺文件默认值（含 `fileRoot` 绝对、`maxFileBytes` 为 100MB）、round-trip、保存 0600、未知字段忽略、坏 JSON/非对象带路径抛错、deny/port/denyMCPTools/fileRoot/maxFileBytes 类型或区间非法均 fail-closed、token 缺失/非法自愈并持久、deny 精确匹配与 `mcp__` 前缀、denyMCPTools 开关、token 32B base64url 且唯一 |
 | `bridge.test.ts` | 11 | 暴露门（deny 与 `mcp__` 过滤、denyMCPTools 关、目录外交集/别名拒、无 Main 会话清晰报错）、审计（dispatch 写 start + 完成写 done 按 id 配对、被拒调用两相齐全、sid 归因）、桥自带工具（列在宿主工具之后、同名宿主优先且调用走宿主、deny 对 `a2a_file_*` 生效、超长参数落盘为 `<len:N,sha256:…>` 且原始载荷不出现） |
-| `fileguard.test.ts` | 16 | 路径词法（绝对/`~`/NUL/控制字符/`.`/`..` 段拒、`a..b` 放行、段长与总长上限）、祖先 realpath 后仍在根内、根内目录符号链接不得把写入引出根、根拒符号链接、根不得是配置/审计的祖先、原子写 0600 与 sha256、overwrite 语义、切片读越界/目录/symlink 拒、分块追加 |
-| `filetools.test.ts` | 18 | 六个工具的契约：内联 put/get 往返 base64 相等、eof/offset 翻页、list 隐藏 `.tmp`、分块乱序/超量/未知 transfer/跨 sid/TTL 过期（注入时钟）/重复 end、end 补建目标父目录、`maxFileBytes` 拒、`bad_base64` 检出篡改、`already_exists`/`overwrite`、schema 全 `additionalProperties:false`、chunk 不进审计而 start/end 进 |
+| `fileguard.test.ts` | 17 | 路径词法（绝对/`~`/NUL/控制字符/`.`/`..` 段拒、`a..b` 放行、段长与总长上限）、祖先 realpath 后仍在根内、根内目录符号链接不得把写入引出根、根拒符号链接、根不得是配置/审计的祖先、原子写 0600 与 sha256、overwrite 语义、切片读越界/目录/symlink 拒、分块追加 |
+| `filetools.test.ts` | 31 | 六个工具的契约：内联 put/get 往返 base64 相等、eof/offset 翻页、**`sha256` 覆盖返回区间而非整文件**、list 隐藏 `.tmp` 且**拒经符号链接列举**、`.tmp` 首段不可寻址而嵌套 `.tmp` 合法、跨会话暂存不可改写、分块乱序/超量/未知 transfer/跨 sid/TTL 过期（注入时钟）/重复 end、end 补建目标父目录、`maxFileBytes` 拒、`bad_base64` 检出篡改、`already_exists`/`overwrite`、schema 全 `additionalProperties:false`、chunk 不进审计而 start/end 进；**并发**：同 seq 并发不双写、8 路同 seq 突发、乱序 seq 并发仍保序、200 块长传输字节精确、**排队中的 chunk 撞上已提交的 put_end 不会写死路径**（这是修复自身引入的竞态）、单步失败不卡死后续分块 |
 | `versions.test.ts` | 4 | 版本守卫：pi-* devDep 必须精确版本（无 `^`/`~`）、实装 == pin（硬断言）、两 pin 一致、`omp --version` ≠ pin 仅告警（omp 缺失时跳过） |
 
 审计断言通过 `A2A_BRIDGE_AUDIT` 沙箱化，文件断言通过 `cfg.fileRoot` 指向临时目录，单测不会写真实 `~/.omp`。

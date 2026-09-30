@@ -202,6 +202,7 @@ bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，�
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
 bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
 bun run test:files    # 真实宿主文件传输核验，71 项（需本机 omp，手动跑）
+bun run test:install  # 跨机器安装核验，26 项（独立 HOME + omp install <git-url>，手动跑）
 ./scripts/install.sh # 安装扩展到 ~/.omp/agent/extensions（--status / --uninstall）
 bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
 ```

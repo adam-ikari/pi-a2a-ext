@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-30T05:46:01"
+updated: "2026-09-30T06:25:32"
 ---
 
 <!-- compiled_truth -->
@@ -313,4 +313,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "跨机器安装验证：独立 HOME（无 config/token/沙箱）+ models.yml 模拟另一台机器，omp install <git-url> 装到 pi-a2a-ext@0.1.0，宿主起桥并自建独立 token 与沙箱。过程中确认三点：(1) omp install 不接受 .tgz（ENOTDIR）、不接受 owner/repo 简写（Invalid package name）；(2) 装的是远端代码，本地未推送时装到旧版本（先得 @undefined，推送后重装才 0.1.0），9 个提交已推送；(3) omp 在无模型配置时先退出、根本不加载扩展，模拟机必须给 models.yml 才测得到扩展。"
   source: "独立 HOME 模拟机实测 2026-09-30"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T06:25:32
+  kind: evidence
+  summary: "跨机器安装实验固化为 test/install-probe.ts（bun run test:install，26 项）：独立 HOME 模拟另一台机器 → omp install <git-url> → 以远程 MCP 客户端走完整流程（manifest/打包文件、首次启动自建 config+token+沙箱、initialize、文件往返、沙箱边界、鉴权、审计），全绿。这是唯一验证「任意机器可装」的探针——test:files 自己软链扩展，完全不碰安装链路。写探针时踩了两个 harness 假阴性（非产品缺陷）：omp --mode rpc --print 带 prompt 跑完即退、桥随之消失导致 ConnectionRefused（须不传 prompt 且 stdin 保持打开）；以 proc.exitCode===null 轮询会在最后一个 stdout 分片到达前提前退出，把「桥正常」误报为「没起来」——最终改为直接 HTTP 探测，test:files 一直这么做故未踩到。顺带修正 docs/testing.md 的过期数字（单测 100→114、fileguard 16→17、filetools 18→31）。"
+  source: "test:install 26/26 2026-09-30"
   affects: [a2a-mcp-bridge]

@@ -204,6 +204,8 @@ bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposur
 bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
 bun run test:approval  # approval-boundary discriminating probe, ~2 minutes (needs a local omp; run manually)
+bun run test:files    # real-host file-transfer checks, 71 items (needs a local omp; run manually)
+bun run test:install  # cross-machine install check, 26 items (isolated HOME + omp install <git-url>; run manually)
 ./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
 ```

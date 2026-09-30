@@ -25,6 +25,7 @@
     "test:hardening": "bun test/hardening.ts",
     "test:approval": "bun test/approval-probe.ts",
     "test:files": "bun test/file-transfer.ts",
+    "test:install": "bun test/install-probe.ts",
     "website": "cd website && bun run start"
   },
   "devDependencies": {
