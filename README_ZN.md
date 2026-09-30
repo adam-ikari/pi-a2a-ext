@@ -24,28 +24,36 @@
 
 ## 安装
 
-在本仓库下执行：
+任意机器上，从 git URL 装：
 
 ```sh
-omp install .
+omp install https://github.com/adam-ikari/pi-a2a-ext.git
 ```
 
-它会把仓库软链到 `~/.omp/plugins/node_modules/pi-a2a-ext` 并注册；`package.json`
-里的 `pi.extensions` 字段就是告诉 omp 该加载哪个入口文件的，**不要删掉它**。
-卸载：
+它会装到 `~/.omp/plugins/node_modules/pi-a2a-ext`。卸载：
 
 ```sh
 omp plugin uninstall pi-a2a-ext
 ```
 
-若不想用 omp 的插件管理器，`./scripts/install.sh` 做同样的事——直接软链到
-`~/.omp/agent/extensions/`，并额外校验软链可解析、且入口 import 的模块齐备。它
-支持 `--status`（只报告状态，坏了非零退出）与 `--uninstall`；要装到
-`~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
+已有本地 checkout 的话，在仓库根执行 `omp install .` 直接链本地这份（开发时方便），
+不会去拉远端。`package.json` 里的 `pi.extensions` 字段就是告诉 omp 该加载哪个入口
+文件的，**不要删掉它**。
 
-> 这两种方式都**不要**用 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 代替。那条
-> 命令只在 `$PWD` 恰好是仓库根目录时有效；换个目录执行就会链到一个不存在的路径，
-> 桥静默地不启动。
+`omp install` 接受的是**目录或 git URL，不接受 `.tgz`**——指向 tarball 会报
+`ENOTDIR`；GitHub 的 `owner/repo` 简写会被当作非法包名拒绝，要用完整的
+`https://….git` URL。
+
+若想绕开插件管理器，`./scripts/install.sh` 直接软链到 `~/.omp/agent/extensions/`，
+并额外校验软链可解析、且入口 import 的模块齐备。它支持 `--status`（只报告状态，
+坏了非零退出）与 `--uninstall`；要装到 `~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
+
+> 这些方式都**不要**用 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 代替。那条命令
+> 只在 `$PWD` 恰好是仓库根目录时有效；换个目录执行就会链到一个不存在的路径，桥静默
+> 地不启动。
+
+首次启动时桥会在 `~/.omp/agent/` 下自行生成配置、token 与文件沙箱，所以每台机器
+无需额外配置。
 
 启动宿主 omp 后，通知栏显示：
 

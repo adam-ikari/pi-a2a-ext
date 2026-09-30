@@ -24,30 +24,39 @@ remote omp (MCP client)                 host omp (MCP server)
 
 ## Install
 
-From this repo:
+On any machine, from the git URL:
 
 ```sh
-omp install .
+omp install https://github.com/adam-ikari/pi-a2a-ext.git
 ```
 
-That links the repo into `~/.omp/plugins/node_modules/pi-a2a-ext` and registers
-it; the `pi.extensions` field in `package.json` is what tells omp which entry
-file to load, so do not remove it. To remove it again:
+That installs it into `~/.omp/plugins/node_modules/pi-a2a-ext`. To remove it:
 
 ```sh
 omp plugin uninstall pi-a2a-ext
 ```
 
-If you would rather not use omp's plugin manager, `./scripts/install.sh` does the
-same job by symlinking straight into `~/.omp/agent/extensions/`, and additionally
-verifies the link resolves and the modules the entry point imports are present.
-It takes `--status` (report state, non-zero if broken) and `--uninstall`; set
+Already have a checkout? `omp install .` from the repo root links that copy
+instead of fetching — handy while developing. The `pi.extensions` field in
+`package.json` is what tells omp which entry file to load, so do not remove it.
+
+`omp install` takes a **directory or a git URL, not a `.tgz`** — pointing it at a
+tarball fails with `ENOTDIR`. A GitHub `owner/repo` shorthand is rejected as an
+invalid package name; use the full `https://….git` URL.
+
+If you would rather bypass the plugin manager, `./scripts/install.sh` symlinks
+straight into `~/.omp/agent/extensions/` and additionally verifies the link
+resolves and the modules the entry point imports are present. It takes
+`--status` (report state, non-zero if broken) and `--uninstall`; set
 `OMP_AGENT_DIR` to target somewhere other than `~/.omp/agent`.
 
-> Do not replace either of these with a bare
+> Do not replace any of these with a bare
 > `ln -s "$PWD/extensions/a2a-bridge.ts" ...`. That one-liner only works when
 > `$PWD` happens to be the repo root; run it from anywhere else and it silently
 > links a path that does not exist, and the bridge simply never comes up.
+
+On first start the bridge generates its own config, token and file sandbox
+under `~/.omp/agent/`, so there is nothing else to set up per machine.
 
 After starting the host omp, the notification bar shows:
 

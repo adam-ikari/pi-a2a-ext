@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-30T05:10:58"
+updated: "2026-09-30T05:46:01"
 ---
 
 <!-- compiled_truth -->
@@ -84,7 +84,13 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 ## 安装方式（2026-09-30 更正）
 
-首选方式是 `omp install .`；`scripts/install.sh` 是等效替代（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
+**跨机器安装用 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`**（装到 `~/.omp/plugins/node_modules/pi-a2a-ext`，`omp plugin uninstall pi-a2a-ext` 卸载）；本地开发用 `omp install .`；`scripts/install.sh` 是绕开插件管理器的等效替代。
+
+`omp install` 的 spec 限制（实测）：接受**本地目录或 git URL**，**不接受 `.tgz`**（报 `ENOTDIR: ... .tgz/package.json`）；GitHub `owner/repo` 简写被当作非法包名（`Invalid package name`），必须用完整 `https://….git` URL。装的是**远端代码**，所以本地提交未推送时，装到的是旧版本——2026-09-30 就因此先装到 `@undefined` 再重装才拿到 `0.1.0`。
+
+**包必须自包含才能跨机器安装**：`package.json` 需要 `version`（缺了 `npm pack` 直接失败、`omp plugins list` 显示 `@undefined`）、`pi.extensions`（加载开关）、`files: ["extensions/", "src/"]`（入口 import 的是 `../src/*.ts`，两者缺一则装上也起不来）。不需要打包 `node_modules`：`@oh-my-pi/*` 由宿主 `omp:legacy-pi-shim` 在运行时重定向到宿主内嵌副本。tarball 实测 12 文件 25.8kB。
+
+**验证方式**：用独立 `HOME`（无 config/token/沙箱）+ 复制一份 `models.yml` 模拟另一台机器，装完启动宿主确认起桥并自建独立 token 与沙箱。中途发现 omp 在无模型配置时会**先退出、根本不加载扩展**，故模拟机必须给 `models.yml` 才能测到扩展加载。（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
 
 **此前 README 的 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 是错的**：该写法依赖调用者的 `$PWD` 恰为仓库根目录，换个目录执行就会链到不存在的路径（实测 `cd /tmp` 后链成 `/tmp/extensions/a2a-bridge.ts`），宿主加载失败但**没有任何用户可见报错**——桥只是永远不出现。**教训：文档里给出的命令若隐含「你得先 cd 到某处」这个前提而不校验，用户会踩到静默失败；安装脚本应自己推导路径并在结束时校验。**
 
@@ -295,4 +301,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: reversal
   summary: "更正上一条 decision：package.json 的 pi.extensions 并非无效，已回滚我的删除。该字段是 omp install . 的开关——删掉后 omp install --json 的 manifest 变 {}、宿主完全不加载扩展（正反两向均实测）。我误判的根因是拿 omp plugins list 的输出当判据（那只列已安装 npm 插件），而正确判据是 omp install --json 的 manifest + 宿主是否真加载。"
   source: "omp install --json + 宿主实测 2026-09-30"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T05:46:01
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "跨机器安装定稿：omp install <git-url> + 包自包含三要素"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T05:46:01
+  kind: evidence
+  summary: "跨机器安装验证：独立 HOME（无 config/token/沙箱）+ models.yml 模拟另一台机器，omp install <git-url> 装到 pi-a2a-ext@0.1.0，宿主起桥并自建独立 token 与沙箱。过程中确认三点：(1) omp install 不接受 .tgz（ENOTDIR）、不接受 owner/repo 简写（Invalid package name）；(2) 装的是远端代码，本地未推送时装到旧版本（先得 @undefined，推送后重装才 0.1.0），9 个提交已推送；(3) omp 在无模型配置时先退出、根本不加载扩展，模拟机必须给 models.yml 才测得到扩展。"
+  source: "独立 HOME 模拟机实测 2026-09-30"
   affects: [a2a-mcp-bridge]
