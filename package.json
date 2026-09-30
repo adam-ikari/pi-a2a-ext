@@ -1,11 +1,22 @@
 {
   "name": "pi-a2a-ext",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with optional sandboxed bidirectional file transfer",
   "license": "MIT",
   "type": "module",
+  "keywords": ["pi-package", "pi", "oh-my-pi", "omp", "mcp", "a2a", "extension"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adam-ikari/pi-a2a-ext.git"
+  },
+  "homepage": "https://github.com/adam-ikari/pi-a2a-ext#readme",
+  "bugs": {
+    "url": "https://github.com/adam-ikari/pi-a2a-ext/issues"
+  },
   "pi": {
     "extensions": ["./extensions/a2a-bridge.ts"]
   },
+  "files": ["extensions/", "src/"],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome check .",
