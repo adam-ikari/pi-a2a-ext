@@ -93,6 +93,7 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 - `/a2a` — 显示当前监听地址、端口、token 前缀、文件沙箱根与大小上限（沙箱不可用时显示 `files disabled`）
 - `/a2a rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
+- `/a2a token` — 打印完整 token（状态行只显示前缀）
 
 ## 远程连接示例
 

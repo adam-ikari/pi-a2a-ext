@@ -70,7 +70,7 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("a2a", {
-		description: "Show A2A bridge status, or rotate its token with `a2a rotate`.",
+		description: "Show A2A bridge status, rotate its token with `a2a rotate`, or show the full token with `a2a token`.",
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
@@ -81,6 +81,14 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 					cfg.token = generateToken();
 					await saveConfig(cfg);
 					ctx.ui.notify("A2A token rotated — update remote mcp.json");
+					return;
+				}
+				if (args.trim() === "token") {
+					if (!server || !cfg) {
+						ctx.ui.notify("A2A bridge not running", "error");
+						return;
+					}
+					ctx.ui.notify(`A2A token: ${cfg.token}`);
 					return;
 				}
 				if (!server || !cfg) {

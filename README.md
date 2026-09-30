@@ -96,6 +96,7 @@ Inside a host session:
 
 - `/a2a` — show the current listen address, port, token prefix, file sandbox root and size cap (`files disabled` when the sandbox is unavailable)
 - `/a2a rotate` — rotate the token (update the remote `mcp.json` afterwards)
+- `/a2a token` — print the full token (the status line only shows a prefix)
 
 ## Remote connection example
 
