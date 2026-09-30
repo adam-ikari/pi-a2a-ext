@@ -1,79 +1,81 @@
 # omp A2A Bridge
 
-把运行中的 omp 变成一个 Streamable HTTP MCP 服务器：远程 omp 通过标准 MCP 协议直接调用宿主当前会话的工具，宿主不调用任何 LLM API。
+[简体中文](README_ZN.md)
 
-## 工作原理
+Turn a running omp into a Streamable HTTP MCP server: a remote omp calls the host session's live tools over the standard MCP protocol, and the host invokes no LLM API.
+
+## How it works
 
 ```
-远程 omp (MCP client)                宿主 omp (MCP server)
-  mcp__omp-host__read  --HTTP/JSON-RPC-->  src/server.ts   鉴权 + 协议
+remote omp (MCP client)                 host omp (MCP server)
+  mcp__omp-host__read  --HTTP/JSON-RPC-->  src/server.ts   auth + protocol
                                              |            (tools/list, tools/call)
                                              v
-                             src/bridge.ts  pi.getAllTools / Main 会话 getToolByName
+                             src/bridge.ts  pi.getAllTools / Main session getToolByName
                                              |
                                              v
-                                   宿主真实工具（read/bash/edit/...）
+                                   the host's real tools (read/bash/edit/...)
 ```
 
-- 扩展在 `session_start` 时启动 `Bun.serve`，实现 MCP `2025-11-25` 的 `initialize` / `tools/list` / `tools/call`，响应为纯 JSON（无 SSE）。
-- 工具目录来自宿主当前会话（`pi.getAllTools()`），执行固定路由到宿主 `Main` 会话的 `getToolByName`，因此走的是宿主原生工具实现。
-- 除宿主工具外，桥自己也贡献 6 个 `a2a_file_*` 工具（双向文件传输，见「文件传输」）：目录追加在宿主工具之后，与宿主同名时宿主优先，同样受 `deny` 约束。
-- 远程调用不经过任何模型推理：宿主只做「收请求 → 跑工具 → 回结果」。
+- The extension starts `Bun.serve` on `session_start` and implements MCP `2025-11-25`'s `initialize` / `tools/list` / `tools/call`, answering with plain JSON (no SSE).
+- The tool catalog comes from the host's current session (`pi.getAllTools()`); execution always routes to `getToolByName` on the host's `Main` session, so calls run the host's own tool implementations.
+- Alongside the host tools, the bridge contributes 6 `a2a_file_*` tools of its own (bidirectional file transfer, see [File transfer](#file-transfer)): appended after the host tools, yielding to the host on a name collision, and equally subject to `deny`.
+- Remote calls involve no model inference at all: the host only receives a request, runs a tool, and returns the result.
 
-## 安装
+## Install
 
-二选一。
+Either way.
 
-1. 软链到 omp 扩展目录：
+1. Symlink it into the omp extensions directory:
 
 ```sh
 ln -s "$PWD/extensions/a2a-bridge.ts" ~/.omp/agent/extensions/a2a-bridge.ts
 ```
 
-2. 或把本仓库作为插件：`package.json` 已声明 `"pi": { "extensions": ["./extensions/a2a-bridge.ts"] }`。
+2. Or use this repo as a plugin: `package.json` already declares `"pi": { "extensions": ["./extensions/a2a-bridge.ts"] }`.
 
-启动宿主 omp 后，通知栏显示：
+After starting the host omp, the notification bar shows:
 
 ```
-A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
+A2A bridge listening on http://127.0.0.1:<port> (token <first 6 chars>…)
 ```
 
-`<port>` 是实际监听端口（默认随机）。
+`<port>` is the actual listening port (random by default).
 
-## 配置
+## Configuration
 
-配置文件 `~/.omp/agent/a2a-bridge.json`，首次启动自动生成，权限 `0600`（创建时即 0600，无权限窗口）：
+The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with mode `0600` (created at that mode, so there is no permission window):
 
 ```json
 { "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "deny": [], "denyMCPTools": false, "maxFileBytes": 104857600 }
 ```
 
-| 字段 | 含义 |
+| Field | Meaning |
 | --- | --- |
-| `port` | `0` = 随机端口；写具体数字则固定 |
-| `token` | Bearer token，首次启动自动生成 |
-| `host` | 监听地址，默认 `127.0.0.1`（改成 `0.0.0.0` 会额外告警） |
-| `deny` | 不暴露的工具名列表 |
-| `denyMCPTools` | `true` 时排除所有 `mcp__` 前缀工具 |
-| `fileRoot` | 文件传输的沙箱根，缺省 `~/.omp/a2a-bridge-files`（与配置/审计同 `~/.omp` 但**不同目录**）。要改写就写**绝对路径**，配置里不展开 `~` |
-| `maxFileBytes` | 单文件大小上限，默认 `104857600`（100MB），允许范围 1KB–1GB |
+| `port` | `0` = random port; set a number to pin it |
+| `token` | Bearer token, generated on first start |
+| `host` | Listen address, default `127.0.0.1` (a warning is added if you change it to `0.0.0.0`) |
+| `deny` | Tool names to withhold |
+| `denyMCPTools` | `true` excludes every `mcp__`-prefixed tool |
+| `fileRoot` | Sandbox root for file transfer, default `~/.omp/a2a-bridge-files` (same `~/.omp` as the config/audit files but a **different directory**). To change it, write an **absolute path** — `~` is not expanded in config |
+| `maxFileBytes` | Per-file size cap, default `104857600` (100MB), allowed range 1KB–1GB |
 
-环境变量 `A2A_BRIDGE_CONFIG` 可覆盖配置文件路径；`A2A_BRIDGE_AUDIT` 可覆盖审计日志路径。
+`A2A_BRIDGE_CONFIG` overrides the config path; `A2A_BRIDGE_AUDIT` overrides the audit log path.
 
-校验是 **fail-closed** 的：字段类型非法（`port` 非整数/越界、`deny` 非字符串数组、`denyMCPTools` 非布尔、`host` 非非空字符串、`fileRoot` 非绝对路径、`maxFileBytes` 非整数或越界）时扩展拒绝启动并报错，不会带着错误的暴露面继续跑。唯一的例外是 `token`：缺失或非法时自动生成并**写回配置**，保证跨重启稳定。
+Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `deny` not an array of strings, `denyMCPTools` not a boolean, `host` not a non-empty string, `fileRoot` not an absolute path, `maxFileBytes` not an integer or out of range) makes the extension refuse to start and report an error, rather than running with a wrong exposure surface. The one exception is `token`: when missing or invalid it is regenerated and **written back to the config**, so it stays stable across restarts.
 
-配置文件的其他改动（如 `deny`）在**下次重启宿主**后生效；运行中只想换 token 用 `/a2a rotate`（立即生效，旧 token 即刻作废）。
+Other config edits (such as `deny`) take effect on the **next host restart**; to change only the token at runtime, use `/a2a rotate` (immediate, and the old token stops working at once).
 
-### 命令
+### Commands
 
-宿主会话内：
+Inside a host session:
 
-- `/a2a` — 显示当前监听地址、端口、token 前缀、文件沙箱根与大小上限（沙箱不可用时显示 `files disabled`）
-- `/a2a rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
+- `/a2a` — show the current listen address, port, token prefix, file sandbox root and size cap (`files disabled` when the sandbox is unavailable)
+- `/a2a rotate` — rotate the token (update the remote `mcp.json` afterwards)
 
-## 远程连接示例
+## Remote connection example
 
-远程 omp 的 `mcp.json`：
+The remote omp's `mcp.json`:
 
 ```json
 {
@@ -87,117 +89,119 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 }
 ```
 
-连上后远程侧会看到 `mcp__omp-host__read`、`mcp__omp-host__bash` 之类的工具，直接调用即可。
+Once connected, the remote side sees tools like `mcp__omp-host__read` and `mcp__omp-host__bash` and can call them directly.
 
-## 跨机转发
+## Cross-machine forwarding
 
-默认只绑回环，不对外网开放。远程机做 SSH 端口转发：
+Loopback-only by default, never exposed to the network. Forward the port over SSH from the remote machine:
 
 ```sh
 ssh -L <localport>:127.0.0.1:<port> user@host
 ```
 
-`mcp.json` 的 `url` 写 `http://127.0.0.1:<localport>/`。
+Then set `mcp.json`'s `url` to `http://127.0.0.1:<localport>/`.
 
-## 审批
+## Approval
 
-远程调用完全复用宿主的审批门（`ExtensionToolWrapper`），不额外开权限：
+Remote calls reuse the host's approval gate (`ExtensionToolWrapper`) entirely and open no additional permissions:
 
-- 宿主默认 `approvalMode` 为 `yolo` → 直通，没有审批环节。
-- 若宿主把某个工具在 `tools.approval` 配成 `prompt`，且宿主有交互 UI（TUI），远程调用会弹 Approve/Deny，用户确认后继续，结果原路返回。
-- 宿主无交互 UI 时（rpc 模式实测；print 同为无 UI 路径，未实测），`prompt` 类审批**不会执行命令，但也不返回**：请求一直挂起（实测 ≥90s），宿主在等一个永远不会出现的 UI 应答。**调用方必须自设超时**；挂起的调用会在审计日志留下 `start` 记录而无配对的 `done`（见下），可据此发现。
+- The host's default `approvalMode` is `yolo` → straight through, no approval step.
+- If the host configures a tool as `prompt` in `tools.approval` **and** the host has an interactive UI (TUI), the remote call raises an Approve/Deny prompt; once the user confirms, it continues and the result returns by the same path.
+- With no interactive UI (measured in rpc mode; print takes the same no-UI path but is untested), a `prompt` approval **neither executes the command nor returns**: the request hangs indefinitely (measured ≥90s) while the host waits for a UI answer that can never arrive. **Callers must impose their own timeout**; a hung call leaves a `start` record with no matching `done` in the audit log (see below), so it is detectable.
 
-## 文件传输
+## File transfer
 
-桥自带 6 个 `a2a_file_*` 工具，双向搬运文件：远程 → 宿主（push）与宿主 → 远程（pull）。它们和宿主工具走同一条 `tools/list` / `tools/call` 管线，因此复用同一套鉴权、会话、`deny` 门禁与审计；**没有新增 JSON-RPC 方法**。线格式采用 A2A FilePart 的 `{name, mimeType, bytes(base64)}`。
+The bridge ships 6 `a2a_file_*` tools that move files in both directions: remote → host (push) and host → remote (pull). They travel the same `tools/list` / `tools/call` pipeline as host tools, so they inherit the same auth, session, `deny` gate and audit trail; **no new JSON-RPC methods are added**. The wire format reuses the A2A FilePart `{name, mimeType, bytes(base64)}` shape.
 
-- 远程侧工具名形如 `mcp__omp-host__a2a_file_put`（前缀取决于 `mcp.json` 里的服务名）。
-- 所有 `path` 相对 `fileRoot`（沙箱根，启动时创建为 `0700`），**不是**宿主文件系统路径。写入一律原子落盘（先写 `fileRoot/.tmp/<uuid>.part` 再 `rename`），文件权限 `0600`。
-- 单文件上限 `maxFileBytes`（默认 100MB）。内联/单块 base64 解码后 ≤ 512KiB，单次读取响应 ≤ 256KiB：
+- Remote tool names look like `mcp__omp-host__a2a_file_put` (the prefix depends on the server name in `mcp.json`).
+- Every `path` is relative to `fileRoot` (the sandbox root, created `0700` at startup), **not** a host filesystem path. Writes always land atomically (write `fileRoot/.tmp/<uuid>.part` first, then `rename`), with file mode `0600`.
+- The per-file cap is `maxFileBytes` (default 100MB). Inline and per-chunk payloads decode to ≤ 512KiB, and a single read response is ≤ 256KiB:
 
 ```text
-# 小文件（≤512KB）一次写完
+# small file (≤512KB) in one call
 a2a_file_put { "path": "inbox/note.md", "file": { "mimeType": "text/markdown", "bytes": "<base64>" } }
 
-# 大文件分块（100MB ≈ 200 块），seq 从 0 起必须连续
+# large file in chunks (100MB ≈ 200 chunks); seq starts at 0 and must be contiguous
 a2a_file_put_start { "path": "bulk/data.tar", "totalBytes": 1048576 }   -> { "transferId": "..." }
 a2a_file_put_chunk { "transferId": "...", "seq": 0, "bytes": "<base64>" }
 a2a_file_put_end   { "transferId": "..." }                              -> { "path", "bytes", "sha256" }
 
-# 读取（翻页直到 eof）
+# reading (page until eof)
 a2a_file_get { "path": "bulk/data.tar", "offset": 0, "limit": 262144 }  -> { "bytes", "totalBytes", "eof" }
 a2a_file_list { "path": "inbox" }                                       -> { "entries": [...] }
 ```
 
-- 失败一律是 `isError: true` + 文本 `a2a_file_error <code>: <message>`，`<code>` 是稳定枚举（`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch` `io_error`）。**没有裸 errno、没有宿主路径**：宿主文件系统自己报错（`ENOTDIR`/`EISDIR`/`ENOSPC` 等）归为兜底码 `io_error`，细节只进宿主 stderr。协议细节（分块重传幂等、暂存目录不可寻址、分块状态绑定会话、30 分钟空闲回收、上限）见 [docs/protocol.md](docs/protocol.md)「桥自带工具」。
-- **重传幂等**：同一个 `seq` 配同一份 `bytes` 再次到达时按已收处理（返回 `duplicate: true`），不会把文件写坏——上面说的「调用方必须自设超时」意味着超时重试是常规动作。同一 `seq` 换内容仍报 `bad_chunk_order`。
-- `deny` 对这些工具同样生效：`"deny": ["a2a_file_put", "a2a_file_put_start", "a2a_file_put_chunk", "a2a_file_put_end"]` 即可只留读、不留写。想整体关掉文件传输，把 6 个名字全 deny 掉。
+- Failures are always `isError: true` plus the text `a2a_file_error <code>: <message>`, where `<code>` is a stable enum (`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch` `io_error`). **No bare errno, no host paths**: when the host filesystem itself fails (`ENOTDIR`/`EISDIR`/`ENOSPC` and friends) the call reports the catch-all code `io_error`, and the details go only to the host's stderr. Protocol details (chunk retry idempotency, the staging directory not being addressable, chunk state bound to a session, 30-minute idle reclamation, caps) are in [docs/protocol.md](docs/protocol.md) under "The bridge's own tools".
+- **Retransmits are idempotent**: the same `seq` with the same `bytes` arriving again is treated as already received (returning `duplicate: true`) instead of being appended twice, so the file is never corrupted — as noted above, "callers must impose their own timeout" makes a timeout retry a routine move. The same `seq` with *different* content is still `bad_chunk_order`.
+- `deny` applies to these tools too: `"deny": ["a2a_file_put", "a2a_file_put_start", "a2a_file_put_chunk", "a2a_file_put_end"]` leaves reads but no writes. To turn file transfer off entirely, deny all 6 names.
 
-## 安全与边界
+## Security and boundaries
 
-- **token 即工具执行全权（默认配置下）**：宿主默认 `approvalMode: yolo`，拿到 token 就可在宿主会话里直接执行任意暴露的工具（含 `bash`），不经过任何审批；只有宿主把工具配成 `prompt` 才有审批门可拦（无 UI 时见审批节）。配置文件保持 `0600`，不要进版本库。
-- **桥自带工具（文件传输）不经宿主审批门**：`a2a_file_*` 不是宿主工具，`tools.approval` 对它们无效——拿到 token 就等于拿到 `fileRoot` **内部**的读写权（这是设计取舍：换取复用同一条管线）。边界由沙箱兜住：路径拒绝绝对路径、`..`、NUL、控制字符、`.` 段；最深存在祖先做 `realpath` 后必须仍在 `fileRoot` 内；目录内符号链接既不顺着读也不顺着写（`symlink_refused`，`a2a_file_list` 也不例外，否则会泄露根外的文件名/大小/mtime）；`fileRoot` 本身不得是符号链接，且不得是配置文件或审计日志的祖先目录（否则启动即失败）。**暂存目录 `.tmp` 不可寻址**（首段为 `.tmp` 一律 `invalid_path`）：传输虽绑定了 `Mcp-Session-Id`，但暂存字节是普通文件，若可寻址则任何客户端都能枚举他人 `transferId`、读取或改写他人的在途上传。
-- **pull 回来的字节会进远程上下文**：`a2a_file_get` 的 base64 是工具结果，会进入远程模型的会话历史。协议支持 100MB，但大二进制建议走 SSH/`scp` 旁路，别用这条通道。
-- 默认仅回环监听；真要对外暴露，防火墙自己负责。
-- **暴露语义 = 会话工具注册表全集**：`tools/list` 直接来自 `pi.getAllTools()`（即 Main 会话注册表），因此包含 `hidden` 工具、也包含宿主模型当前被禁用的工具——这不是「宿主模型当前可见集合」的镜像。需要收紧就用 `deny` / `denyMCPTools`。
-- **调用与列表同源**：`tools/call` 只接受出现在 `tools/list` 中的名字（deny 过滤之后），别名（如 `xd://bash`）和未列出的名字一律拒绝，且拒绝时不区分「被 deny」与「不存在」（不泄露名字是否存在）。deny 判定在 list 与 call 两侧各做一次。
-- **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
-- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。**只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）；轮转恰逢中途时，配对的两条可能分处 `.1` 与当前文件。日志写失败不影响调用。参数里超过 120 字符的字符串（文件 base64 正文）只记 `<len:N,sha256:前8位>`，日志不落载荷；`a2a_file_put_chunk` 完全不记（否则一次上传就是几百行），由 start/end 两条记录夹住整个传输。
-- 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
+- **The token is full tool-execution authority (under the default config)**: the host's default `approvalMode: yolo` means anyone holding the token can execute any exposed tool (including `bash`) directly in the host session with no approval step; only tools the host configures as `prompt` have a gate that can stop them (see [Approval](#approval) for the no-UI case). Keep the config file at `0600` and out of version control.
+- **The bridge's own tools (file transfer) do not pass through the host's approval gate**: `a2a_file_*` are not host tools, so `tools.approval` has no effect on them — holding the token equals read/write authority **inside** `fileRoot` (a deliberate trade-off: it buys reuse of the same pipeline). The sandbox is what holds the line: paths reject absolute paths, `..`, NUL, control characters and `.` segments; the deepest existing ancestor is `realpath`ed and must still be inside `fileRoot`; symlinks inside the root are neither followed for reading nor for writing (`symlink_refused`, `a2a_file_list` included — otherwise it would leak filenames/sizes/mtimes from outside the root); `fileRoot` itself must not be a symlink, nor an ancestor of the config file or audit log (otherwise startup fails). **The staging directory `.tmp` is not addressable** (a leading `.tmp` segment is always `invalid_path`): a transfer is bound to an `Mcp-Session-Id`, but the staged bytes are ordinary files, so if `.tmp` were reachable any client could enumerate other sessions' `transferId`s and read or rewrite their in-flight uploads.
+- **Bytes pulled back land in the remote context**: `a2a_file_get`'s base64 is a tool result and enters the remote model's session history. The protocol supports 100MB, but large binaries should go over SSH/`scp` instead of this channel.
+- Loopback-only by default; if you really do expose it, the firewall is your responsibility.
+- **Exposure semantics = the full session tool registry**: `tools/list` comes straight from `pi.getAllTools()` (the Main session registry), so it includes `hidden` tools and tools the host model currently has disabled — it is *not* a mirror of "what the host model can currently see". Tighten it with `deny` / `denyMCPTools`.
+- **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list` (after deny filtering); aliases (such as `xd://bash`) and unlisted names are refused, and a refusal does not distinguish "denied" from "nonexistent" (so it does not leak whether a name exists). The deny decision is made once on each side, list and call.
+- **Sessions are mandatory**: every message except `initialize` must carry `Mcp-Session-Id` (missing → 400, unknown or idle past 24h → 404). At most 64 sessions are tracked, with the least-recently-seen evicted beyond that; every hit refreshes the idle timer.
+- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI); if rotation lands mid-call, the paired records can end up split across `.1` and the current file. Audit write failures never affect the call. Strings longer than 120 characters in the args (file base64 bodies) are recorded as `<len:N,sha256:first 8>` so the log never holds payloads; `a2a_file_put_chunk` is not recorded at all (one upload would otherwise be hundreds of lines), with the start/end records bracketing the whole transfer.
+- If the configured port is busy, the bridge falls back to an ephemeral port and warns (update the port in the remote `mcp.json`).
 
-请求/响应格式、处理顺序、会话生命周期与错误码总表的完整 wire 契约见 [docs/protocol.md](docs/protocol.md)。
+The full wire contract — request/response shapes, processing order, session lifecycle and the error-code table — is in [docs/protocol.md](docs/protocol.md).
 
-在线文档站（GitHub Pages，push 自动发布）：<https://adam-ikari.github.io/pi-a2a-ext/>
+Online docs (GitHub Pages, published on push): <https://adam-ikari.github.io/pi-a2a-ext/>
 
-v1 边界：
+v1 boundaries:
 
-- 只暴露工具（`tools/list` + `tools/call`），无 resources、无 prompts。
-- 无 SSE 推送，无调用取消。
-- 固定路由到宿主 `Main` 会话。
-- 静态 Bearer token，无 OAuth。
-- 无并发/速率限制。
+- Tools only (`tools/list` + `tools/call`); no resources, no prompts.
+- No SSE push, no call cancellation.
+- Always routed to the host's `Main` session.
+- Static Bearer token, no OAuth.
+- No concurrency or rate limiting.
 
-## 故障排查
+## Troubleshooting
 
-- **401 `unauthorized`**：token 不匹配。远程 `mcp.json` 的 `Authorization` 头必须与配置 `token` 一致；`/a2a rotate` 之后要同步改远程侧。
-- **400 `missing mcp-session-id` / 404 `unknown session`**：除 `initialize` 外都要带会话头。会话是宿主进程内存态——宿主重启即全部失效、空闲超 24h 也回收；重新 `initialize` 拿新会话即可（正规 MCP 客户端库会自动处理）。
-- **连不上 / 端口对不上**：宿主启动时配置端口被占用会回退到随机端口并在通知栏告警——以通知栏或 `/a2a` 显示的实际端口更新 `mcp.json`。
-- **调用一直没有返回**：宿主无交互 UI 且该工具审批为 `prompt`（见「审批」）——命令不会执行但也不返回；调用方必须自设超时，审计日志里该调用只有 `start` 没有 `done`（见「安全与边界」的审计日志条目）。
-- **500 `internal error`**：服务端内部故障；响应体固定不含细节（防泄露），真实原因在宿主 stderr，形如 `[a2a-bridge] internal error: …`。
-- **改了配置不生效**：外部编辑 `a2a-bridge.json`（如 `deny`、`port`）需重启宿主；运行中只有 `/a2a rotate` 即时生效。
-- **`bun test` 版本守卫失败**（开发）：`@oh-my-pi/pi-*` 实装与 pin/lock 失同步——`bun install` 恢复；`omp --version` 与 pin 不一致只告警，升级宿主时同步改 `package.json` 里的两个精确版本号。
+- **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2a rotate`.
+- **400 `missing mcp-session-id` / 404 `unknown session`**: every message except `initialize` needs the session header. Sessions are in-memory in the host process — they all die when the host restarts and are reclaimed after 24h idle; run `initialize` again for a new session (a well-behaved MCP client library does this automatically).
+- **Cannot connect / wrong port**: if the configured port is busy at host startup, the bridge falls back to a random port and warns in the notification bar — use the actual port shown there or in `/a2a` to update `mcp.json`.
+- **A call never returns**: the host has no interactive UI and the tool's approval is `prompt` (see [Approval](#approval)) — the command does not execute, but neither does the call return; the caller must impose its own timeout, and the audit log shows a `start` with no `done` for that call (see the audit-log bullet under [Security and boundaries](#security-and-boundaries)).
+- **500 `internal error`**: an internal server fault; the response body is deliberately detail-free (to avoid leaking), and the real cause is in the host's stderr as `[a2a-bridge] internal error: …`.
+- **Config edits do not take effect**: external edits to `a2a-bridge.json` (such as `deny` or `port`) need a host restart; only `/a2a rotate` applies live at runtime.
+- **`bun test` version guard fails** (development): the installed `@oh-my-pi/pi-*` is out of sync with the pin/lock — `bun install` restores it; an `omp --version` that differs from the pin only warns, so update the two exact versions in `package.json` when you upgrade the host.
 
-## 开发
+## Development
 
 ```sh
 bun install
 
-bun run typecheck     # 类型检查
-bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
-bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
-bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，手动跑）
-bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
-bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
-bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
+bun run typecheck     # type check
+bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
+bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
+bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
+bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
+bun run test:approval  # approval-boundary discriminating probe, ~2 minutes (needs a local omp; run manually)
+bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
 ```
 
-各测试的覆盖面、真实宿主探针的前置条件与判读标准（含审批探针 VERDICT A/B/C 语义）见 [docs/testing.md](docs/testing.md)。
+What each test covers, the preconditions for the real-host probes, and how to read their verdicts (including the approval probe's VERDICT A/B/C semantics) are in [docs/testing.md](docs/testing.md).
 
-依赖说明：`@oh-my-pi/pi-coding-agent` 与 `@oh-my-pi/pi-ai` 以**精确版本**固定在 `devDependencies`，与宿主 omp 版本保持一致，仅用于类型检查与单测。**运行时不要从 `node_modules` 加载它们**——宿主 omp 的 `omp:legacy-pi-shim` 会把这些 import 重定向到宿主内嵌的同一份模块，`AgentRegistry.global()` 这类模块级单例才能共享；升级 omp 时同步改这两个版本号；`bun test` 内置**版本守卫**：实装 devDep ≠ pin 直接失败，`omp --version` ≠ pin 时告警。
+Dependency note: `@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-ai` are pinned to **exact versions** in `devDependencies`, kept in step with the host omp version, and used only for type checking and unit tests. **Do not load them from `node_modules` at runtime** — the host omp's `omp:legacy-pi-shim` redirects those imports to the same modules bundled inside the host, which is what lets module-level singletons like `AgentRegistry.global()` be shared; update both version numbers when upgrading omp. `bun test` includes a **version guard**: an installed devDep that differs from the pin fails outright, and an `omp --version` that differs from the pin only warns.
 
-文件布局：
+File layout:
 
-| 路径 | 职责 |
+| Path | Responsibility |
 | --- | --- |
-| `extensions/a2a-bridge.ts` | 扩展入口，`session_start` 起服务器，注册 `/a2a` |
-| `src/server.ts` | `Bun.serve` + JSON-RPC（MCP 2025-11-25，纯 JSON 响应）、会话与版本协商 |
-| `src/bridge.ts` | 工具目录与执行（`pi.getAllTools` / AgentRegistry Main 会话）、暴露交集判定 |
-| `src/config.ts` | 配置加载/保存、字段校验、token 生成、deny 判定 |
-| `src/auth.ts` | Bearer token 校验（timing-safe 比较） |
-| `src/audit.ts` | 远程调用审计日志（JSONL 两阶段 `start`/`done`，轮转） |
+| `extensions/a2a-bridge.ts` | Extension entry point: starts the server on `session_start`, registers `/a2a` |
+| `src/server.ts` | `Bun.serve` + JSON-RPC (MCP 2025-11-25, plain JSON responses), sessions and version negotiation |
+| `src/bridge.ts` | Tool catalog and execution (`pi.getAllTools` / AgentRegistry Main session), exposure-intersection decision |
+| `src/fileguard.ts` | Path sandbox: lexical rejection, realpath containment, symlink refusal, atomic writes |
+| `src/filetools.ts` | The bridge's own `a2a_file_*` tools, chunked transfers, error-code mapping |
+| `src/config.ts` | Config load/save, field validation, token generation, deny decision |
+| `src/auth.ts` | Bearer token verification (timing-safe comparison) |
+| `src/audit.ts` | Audit log for remote calls (two-phase JSONL `start`/`done`, rotation) |
 
-变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+Change history: [CHANGELOG.md](CHANGELOG.md).
 
-## 许可
+## License
 
-MIT，见 [LICENSE](LICENSE)。
+MIT, see [LICENSE](LICENSE).
