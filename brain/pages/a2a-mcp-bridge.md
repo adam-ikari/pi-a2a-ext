@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-30T04:46:48"
+updated: "2026-09-30T05:10:58"
 ---
 
 <!-- compiled_truth -->
@@ -84,13 +84,21 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 ## 安装方式（2026-09-30 更正）
 
-唯一受支持的方式是 `scripts/install.sh`（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
+首选方式是 `omp install .`；`scripts/install.sh` 是等效替代（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
 
 **此前 README 的 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 是错的**：该写法依赖调用者的 `$PWD` 恰为仓库根目录，换个目录执行就会链到不存在的路径（实测 `cd /tmp` 后链成 `/tmp/extensions/a2a-bridge.ts`），宿主加载失败但**没有任何用户可见报错**——桥只是永远不出现。**教训：文档里给出的命令若隐含「你得先 cd 到某处」这个前提而不校验，用户会踩到静默失败；安装脚本应自己推导路径并在结束时校验。**
 
-顺带更正两条同样无效的旧说法：
-- **`package.json` 的 `"pi": { "extensions": [...] }` 字段是无效的**（已从 package.json 删除）。`omp plugins list` 只列出**已安装的 npm 插件**，不读取本地 package.json 的该字段。此前 README 说的「或把本仓库作为插件」从来不可用。
-- 扩展入口 import 的是 `../src/*.ts`，但**这不构成安装障碍**：Bun 解析相对导入前先 `realpath` 软链，因此单文件软链能正确落到仓库的 `src/`（实测 `~/.omp/agent/extensions/a2a-bridge.ts` → repo `extensions/` → `../src/server.ts` 存在，宿主实测正常起桥）。曾误判此处会断链，**靠实际安装+启动宿主才确认它其实可用**。
+### 更正一：`omp install .` 才是首选，`pi.extensions` 是它的开关（我曾误删）
+
+**`omp install .` 从仓库根执行即可**（等价于 `plugin install`/`plugin link`），把仓库软链到 `~/.omp/plugins/node_modules/pi-a2a-ext` 并注册；`omp plugin uninstall pi-a2a-ext` 卸载。**它依赖 `package.json` 的 `"pi": { "extensions": ["./extensions/a2a-bridge.ts"] }`**——删掉该字段后 `omp install --json` 的 `manifest` 变成 `{}`，宿主**完全不加载**任何扩展（实测）。
+
+**我一度把该字段删掉并写进 CHANGELOG 说它「无效」，那是错的，已回滚。** 错因：我拿 `omp plugins list` 的输出当判据（它只列**已安装 npm 插件**，与 manifest 解析无关，我这个仓库不是 npm 插件所以查不到），而**真正的判据是 `omp install --json` 的 `manifest` 字段 + 宿主是否真的加载**。同款错误此前已在版本漂移那轮出现过一次（拿 `omp --version` 与 registry latest 混淆）——**同一个错误模式：拿「列表里没有」当「机制不支持」。**
+
+对照证据：可用插件 `@better-compact/pi` 的 package.json 同时有 `pi.extensions` / `omp.extensions` / `main` / `exports` / `files` / `keywords:["pi-package",...]`。
+
+### 更正二：单文件软链不构成障碍（曾误判）
+
+扩展入口 import 的是 `../src/*.ts`，但 Bun 解析相对导入前先 `realpath` 软链，因此软链能正确落到仓库的 `src/`（实测宿主正常起桥）。曾误判此处会断链，**靠实际安装 + 启动宿主才确认可用**。`scripts/install.sh` 保留模块齐备检查只作纵深防御。
 
 脚本自身的两个非显然细节：`--status` 判活必须用 `readlink` 原始目标 + `[ -e ]`，**不能用 `readlink -f`**——后者对悬空软链输出空串并非零退出，会让断链显示成「已安装」。安装目标若是真实文件（用户自己的扩展）一律拒绝覆盖。
 
@@ -275,4 +283,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: "安装方式更正轮 2026-09-30（install.sh + 两条无效旧说明作废）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T05:10:58
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "安装方式定稿：omp install . 为首选，pi.extensions 是其开关（回滚我此前的误删）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T05:10:58
+  kind: reversal
+  summary: "更正上一条 decision：package.json 的 pi.extensions 并非无效，已回滚我的删除。该字段是 omp install . 的开关——删掉后 omp install --json 的 manifest 变 {}、宿主完全不加载扩展（正反两向均实测）。我误判的根因是拿 omp plugins list 的输出当判据（那只列已安装 npm 插件），而正确判据是 omp install --json 的 manifest + 宿主是否真加载。"
+  source: "omp install --json + 宿主实测 2026-09-30"
   affects: [a2a-mcp-bridge]
