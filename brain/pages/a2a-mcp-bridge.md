@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-30T02:51:51"
+updated: "2026-09-30T04:26:43"
 ---
 
 <!-- compiled_truth -->
@@ -21,7 +21,7 @@ Streamable HTTP on 127.0.0.1 via Bun.serve, single process inside the host omp. 
 
 ## Q3 Approval (decided; protocol behavior reversed 2026-09-24)
 Reuse the host's built-in approval gate. Registry tools ARE ExtensionToolWrapper instances (sdk.ts:2922) which run resolveApproval internally: yolo passes, deny throws -> isError, per-tool prompt raises ui.select. The bridge must inject the REAL session.settings and the ExtensionContext ui into the AgentToolContext it builds; it implements no approval logic itself.
-REVERSED (approval probes on omp 18.2.10, --mode rpc): prompt tier with NO interactive UI does NOT return isError — the tools/call request hangs indefinitely (>=90s observed; src/ contains no setTimeout/AbortSignal/timeout anywhere). Execution is still blocked (side-effect probe never fired), so fail-closed holds only in the security sense, not the protocol sense: README:105 has been corrected (2026-09-24) to document the hang, the caller-timeout requirement, and the start-without-done audit trace; the discriminating probe is committed as test/approval-probe.ts (expected verdict B). Host mechanism: hasUI=false in plain rpc (host sets hasUI=f||r==="rpc-ui"), so ui.select has no answerer; the host's 600000ms input timeout belongs to login, not approval. The TUI prompt path is unaffected.
+REVERSED (approval probes on omp 18.2.10, --mode rpc): prompt tier with NO interactive UI does NOT return isError — the tools/call request hangs indefinitely (>=90s observed; src/ contains no setTimeout/AbortSignal/timeout anywhere). Execution is still blocked (side-effect probe never fired), so fail-closed holds only in the security sense, not the protocol sense: the README section 「审批 / Approval」 (was line 105; corrected 2026-09-24 to document the hang, the caller-timeout requirement, and the start-without-done audit trace; the discriminating probe is committed as test/approval-probe.ts (expected verdict B). Host mechanism: hasUI=false in plain rpc (host sets hasUI=f||r==="rpc-ui"), so ui.select has no answerer; the host's 600000ms input timeout belongs to login, not approval. The TUI prompt path is unaffected.
 
 ## Q4 Exposure (decided; tightened 2026-09-23)
 pi.getAllTools() -> full tool list (name/description/parameters via toolWireSchema -> JSON Schema 2020-12), config deny list removes tools from both tools/list and tools/call. No whitelist in v1.
@@ -44,7 +44,7 @@ Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — m
 - Host MCP client pages tools/list with do-while on nextCursor (mcp/client.ts:233); omitting nextCursor is valid.
 - @oh-my-pi/* specifiers in extensions are rewritten at runtime by omp's `omp:legacy-pi-shim` Bun onResolve plugin (regex ^@(oh-my-pi|mariozechner|earendil-works)/(pi-agent-core|pi-ai|pi-coding-agent|pi-natives|pi-tui|pi-utils)(/.*)?$) to the host's bundled modules. AgentRegistry.global() is a MODULE-level static, so a second copy loaded from node_modules would fork the registry and tools/call would see no Main session — hence those packages belong in devDependencies only, pinned to the host omp version, never relied on at runtime.
 - omp's Streamable HTTP client throws Transport not connected from notify() unless a session id exists, and attaches Mcp-Session-Id to every post-initialize request: strict session enforcement cannot break omp's own client.
-- Approval probes (2026-09-24, omp 18.2.10, --mode rpc, default settings): default approvalMode yolo -> remote bash EXECUTED in 0.03s (README:103 confirmed). With --approval-mode=always-ask: read auto-approved (17-30ms), bash hung >=90s, side-effect file never appeared, server answered ping 200 afterwards. Probe committed as test/approval-probe.ts (exit 1 on fail-open/unexpected return/audit-invisible); hardening probe committed as test/hardening.ts (29 checks incl. two-phase pairing and sid-attribution assertions).
+- Approval probes (2026-09-24, omp 18.2.10, --mode rpc, default settings): default approvalMode yolo -> remote bash EXECUTED in 0.03s (README 「审批 / Approval」 yolo bullet confirmed). With --approval-mode=always-ask: read auto-approved (17-30ms), bash hung >=90s, side-effect file never appeared, server answered ping 200 afterwards. Probe committed as test/approval-probe.ts (exit 1 on fail-open/unexpected return/audit-invisible); hardening probe committed as test/hardening.ts (29 checks incl. two-phase pairing and sid-attribution assertions).
 - Version state 2026-09-24 (corrected): host omp is 18.2.10 (omp --version + global pi-coding-agent/pi-ai all agree); devDep pin + bun.lock + node_modules are 18.2.10 — the "pin == host" invariant HOLDS. The earlier "host 18.2.11" claim was wrong: 18.2.11 is the registry latest, not the installed version. The real anomaly was repo node_modules at 18.2.11, desynced from its own lock, healed via bun install (tsc + tests green under both versions). Guard added: test/versions.test.ts hard-asserts exact pins and installed==pin, warns when omp --version != pin.
 - Typing the execute() context against the host SDK depends on pi-coding-agent's AgentToolContext augmentation being loaded: the `import type {} from "@oh-my-pi/pi-coding-agent/tools/context"` in src/bridge.ts merges the CustomToolContext required fields (sessionManager/modelRegistry/model/isIdle/hasQueuedMessages/abort) plus ui/hasUI into the interface. Mutation-verified 2026-09-24 (deleting abort from the literal fails tsc); deleting that empty import silently degrades the check to vacuous (the pi-agent-core base interface is all-optional), so keep it. Related: pi-ai Static<TSchema> = unknown (execute args need no cast) and ToolInfo.parameters is TSchema (flows typed into toolWireSchema) — the three historical `as never` casts were removed 2026-09-24.
 
@@ -71,6 +71,15 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 ## 方法论：这份代码要靠探针评审，不能靠读
 
 100 个单测全绿时，上述缺陷**全部存在**。逐条静态阅读都能自圆其说——`.tmp` 只在 `list(".")` 过滤看起来是「已隐藏」，`stat` 看起来是「常规存在性检查」，每页算哈希看起来是「顺手给出完整性」。它们只在**跨进程/并发的实际调用**下暴露。这与既有记录一致（`put_end` 不建父目录也是真实宿主探针抓到的，单测当时全绿）。更要紧的是第二轮的教训：**P1 修完立刻又用对抗探针（8 路同 seq、200 块长传输、40 路并发 start、排队 vs 提交）打了一遍，才抓到修复自身引入的活性竞态**——第一轮的全绿并不代表修复没有副作用。评审这类文件面/并发代码：先写复现探针再下结论，修完再打一轮对抗，单测全绿不构成正确性证据。
+
+
+## 文档语言分工（2026-09-30 决定）
+
+`README.md` = **英文**（GitHub 默认展示、_ZN 惯例下的基础名即默认语言），`README_ZN.md` = 中文。顶部互相链接：英文版 `[简体中文](README_ZN.md)`，中文版 `[English](README.md) | 简体中文`。
+
+**文档站仍然渲染中文**：`website/scripts/sync.mjs` 改为读 `README_ZN.md`（不是 README.md），并剥掉那行语言切换（站点单语言，站点内不需要切换入口）；标题仍是「使用指南」。若改成读 README.md，站点会在中文导航「指南」下显示英文，且 `[English](README.md)` 会指向站外不存在的路径。
+
+**教训（与 brain 里那 3 处 README 行号引用同源）**：文档之间**不要用行号互引**——README 改一次行号就全断。Q3 段落里原有 `README:103` / `README:105` 两处硬编码行号，已在 compiled_truth 内改为章节引用（「审批 / Approval」）。但 timeline 里的 3 处（append-only，历史证据）**故意保留行号不改**：timeline 记录的是「当时的事实」，改它就是篡改证据；这 3 处的失效不影响任何人，因为它们描述的是 2026-09-24 那天的状态。
 
 
 ## Timeline
@@ -235,4 +244,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "第二轮对抗测试（18 项）抓到 1 个**修复自身引入**的 P1：串行化后排队中的 put_chunk 会在 put_end 已 rename 走暂存文件后往死路径 append，报 ok 但字节静默丢失并留下无人回收的孤儿 .part；修法为串行步骤内 requireLive(tr) 重验活性（Transfer 自带 id）。同时发现我自己的 3 处探针断言写错（okPayload 返回 null 非 undefined；传输已满是 size_mismatch 非 bad_chunk_order；串行化后乱序 seq 是被拒而非被吸收），均为断言错非代码错——再次印证探针会纠正评审者。基线：单测 110→114，宿主四件套全绿（FILES OK 62/62、SMOKE OK、HARDEN OK 29/29、approval VERDICT B）。"
   source: "对抗探针 + 四件宿主探针 2026-09-30"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T04:26:25
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "README 语言分工轮 2026-09-30（英文默认 + 中文 _ZN，站点仍渲染中文）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T04:26:43
+  kind: evidence
+  summary: "README.md 改写为英文（新增 fileguard/filetools 两行文件布局、补 test:files 命令），README_ZN.md 承接中文并加语言切换；sync.mjs 改读 README_ZN.md 且剥掉切换行（曾因正则未跨行匹配而漏剥，已修 m 标志）。brain compiled_truth 内 2 处 README 硬编码行号改为章节引用，timeline 内 3 处按 append-only 保留。验证：website build SUCCESS 且站点 intro 仍为中文、链接全部 ./ 形式无断链。"
+  source: "双语 README + 站点构建 2026-09-30"
   affects: [a2a-mcp-bridge]
