@@ -6,15 +6,34 @@ Turn a running omp into a Streamable HTTP MCP server: a remote omp calls the hos
 
 ## How it works
 
-```
-remote omp (MCP client)                 host omp (MCP server)
-  mcp__omp-host__read  --HTTP/JSON-RPC-->  src/server.ts   auth + protocol
-                                             |            (tools/list, tools/call)
-                                             v
-                             src/bridge.ts  pi.getAllTools / Main session getToolByName
-                                             |
-                                             v
-                                   the host's real tools (read/bash/edit/...)
+```mermaid
+graph TB
+    subgraph Remote["🖥️ remote omp (MCP client)"]
+        Client["🔌 MCP client<br/>mcp__omp-host__read"]
+    end
+
+    subgraph Host["🏠 host omp (MCP server)"]
+        direction TB
+        Serve["⚙️ src/server.ts<br/>Bun.serve · auth + protocol<br/>tools/list · tools/call"]
+        Bridge["🌉 src/bridge.ts<br/>pi.getAllTools() · Main session"]
+        Tools["🛠️ host's real tools<br/>read · bash · edit"]
+        Files["📦 a2a_file_*<br/>bidirectional file transfer"]
+
+        Serve -->|"getToolByName().execute()"| Bridge
+        Bridge --> Tools
+        Bridge --> Files
+    end
+
+    Client -->|"HTTP/JSON-RPC<br/>2025-11-25 · Bearer token"| Serve
+
+    classDef client fill:#FFE66D,stroke:#F08C00,color:#000
+    classDef server fill:#4ECDC4,stroke:#0B7285,color:#fff
+    classDef tool fill:#A8DADC,stroke:#1864AB,color:#000
+    classDef owned fill:#95E1D3,stroke:#087F5B,color:#000
+    class Client client
+    class Serve,Bridge server
+    class Tools tool
+    class Files owned
 ```
 
 - The extension starts `Bun.serve` on `session_start` and implements MCP `2025-11-25`'s `initialize` / `tools/list` / `tools/call`, answering with plain JSON (no SSE).

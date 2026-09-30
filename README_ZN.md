@@ -6,15 +6,34 @@
 
 ## 工作原理
 
-```
-远程 omp (MCP client)                宿主 omp (MCP server)
-  mcp__omp-host__read  --HTTP/JSON-RPC-->  src/server.ts   鉴权 + 协议
-                                             |            (tools/list, tools/call)
-                                             v
-                             src/bridge.ts  pi.getAllTools / Main 会话 getToolByName
-                                             |
-                                             v
-                                   宿主真实工具（read/bash/edit/...）
+```mermaid
+graph TB
+    subgraph Remote["🖥️ 远程 omp（MCP client）"]
+        Client["🔌 MCP 客户端<br/>mcp__omp-host__read"]
+    end
+
+    subgraph Host["🏠 宿主 omp（MCP server）"]
+        direction TB
+        Serve["⚙️ src/server.ts<br/>Bun.serve · 鉴权 + 协议<br/>tools/list · tools/call"]
+        Bridge["🌉 src/bridge.ts<br/>pi.getAllTools() · Main 会话"]
+        Tools["🛠️ 宿主真实工具<br/>read · bash · edit"]
+        Files["📦 a2a_file_*<br/>双向文件传输"]
+
+        Serve -->|"getToolByName().execute()"| Bridge
+        Bridge --> Tools
+        Bridge --> Files
+    end
+
+    Client -->|"HTTP/JSON-RPC<br/>2025-11-25 · Bearer token"| Serve
+
+    classDef client fill:#FFE66D,stroke:#F08C00,color:#000
+    classDef server fill:#4ECDC4,stroke:#0B7285,color:#fff
+    classDef tool fill:#A8DADC,stroke:#1864AB,color:#000
+    classDef owned fill:#95E1D3,stroke:#087F5B,color:#000
+    class Client client
+    class Serve,Bridge server
+    class Tools tool
+    class Files owned
 ```
 
 - 扩展在 `session_start` 时启动 `Bun.serve`，实现 MCP `2025-11-25` 的 `initialize` / `tools/list` / `tools/call`，响应为纯 JSON（无 SSE）。
