@@ -24,15 +24,30 @@ remote omp (MCP client)                 host omp (MCP server)
 
 ## Install
 
-Either way.
-
-1. Symlink it into the omp extensions directory:
+From anywhere — the script locates the repo itself, so it does not matter which
+directory you run it in:
 
 ```sh
-ln -s "$PWD/extensions/a2a-bridge.ts" ~/.omp/agent/extensions/a2a-bridge.ts
+./scripts/install.sh
 ```
 
-2. Or use this repo as a plugin: `package.json` already declares `"pi": { "extensions": ["./extensions/a2a-bridge.ts"] }`.
+It symlinks the extension into `~/.omp/agent/extensions/`, then verifies the link
+resolves and that the modules the entry point imports are present, so a broken
+install fails loudly instead of leaving you with a bridge that never starts.
+
+> Do not replace this with a bare `ln -s "$PWD/extensions/a2a-bridge.ts" ...`.
+> That one-liner only works when `$PWD` happens to be the repo root; run it from
+> anywhere else and it silently links a path that does not exist, and the bridge
+> simply never comes up.
+
+Other subcommands:
+
+```sh
+./scripts/install.sh --status     # report install state, change nothing (non-zero if broken)
+./scripts/install.sh --uninstall   # remove the symlink; the token config and audit log are kept
+```
+
+Set `OMP_AGENT_DIR` to install somewhere other than `~/.omp/agent`.
 
 After starting the host omp, the notification bar shows:
 
@@ -180,6 +195,7 @@ bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposur
 bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
 bun run test:approval  # approval-boundary discriminating probe, ~2 minutes (needs a local omp; run manually)
+./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
 ```
 

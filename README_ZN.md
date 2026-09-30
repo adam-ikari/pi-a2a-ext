@@ -24,15 +24,25 @@
 
 ## 安装
 
-二选一。
-
-1. 软链到 omp 扩展目录：
+在任意目录下执行即可——脚本自己定位仓库，所以在哪个目录跑都不影响：
 
 ```sh
-ln -s "$PWD/extensions/a2a-bridge.ts" ~/.omp/agent/extensions/a2a-bridge.ts
+./scripts/install.sh
 ```
 
-2. 或把本仓库作为插件：`package.json` 已声明 `"pi": { "extensions": ["./extensions/a2a-bridge.ts"] }`。
+它把扩展软链到 `~/.omp/agent/extensions/`，随后**校验**软链可解析、且入口点 import 的模块都在——装坏了会当场报错，而不是留下一个永远起不来的桥。
+
+> 不要用 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 代替。那条命令只在 `$PWD`
+> 恰好是仓库根目录时有效；换个目录执行就会链到一个不存在的路径，桥静默地不启动。
+
+其他子命令：
+
+```sh
+./scripts/install.sh --status     # 只报告安装状态，不做任何改动（坏了则非零退出）
+./scripts/install.sh --uninstall   # 删掉软链；token 配置与审计日志保留
+```
+
+要装到 `~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
 
 启动宿主 omp 后，通知栏显示：
 
@@ -181,6 +191,7 @@ bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，�
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
 bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
 bun run test:files    # 真实宿主文件传输核验，71 项（需本机 omp，手动跑）
+./scripts/install.sh # 安装扩展到 ~/.omp/agent/extensions（--status / --uninstall）
 bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
 ```
 
