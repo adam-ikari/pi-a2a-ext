@@ -127,8 +127,21 @@ export function buildCallTool(
 			hasUI: extCtx.hasUI,
 			localProtocolOptions: extCtx.localProtocolOptions,
 		};
+		// Mirror the host's own tool events so the controlled TUI renders each
+		// remote call exactly like a local one (same card, same lifecycle). These
+		// events drive rendering only — unlike message_end they never touch the
+		// message stream, so the remote call cannot perturb the LLM context.
+		const toolCallId = randomUUID();
+		session.agent.emitExternalEvent({ type: "tool_execution_start", toolCallId, toolName: name, args });
 		try {
-			const r = await tool.execute(randomUUID(), args, undefined, undefined, ctx);
+			const r = await tool.execute(toolCallId, args, undefined, undefined, ctx);
+			session.agent.emitExternalEvent({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName: name,
+				result: r,
+				isError: !!r.isError,
+			});
 			const content = (r.content ?? []).map((b) =>
 				b?.type === "text"
 					? { type: "text" as const, text: b.text }
@@ -138,7 +151,15 @@ export function buildCallTool(
 			);
 			return { content, isError: !!r.isError };
 		} catch (e) {
-			return { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
+			const message = (e as Error)?.message ?? String(e);
+			session.agent.emitExternalEvent({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName: name,
+				result: { content: [{ type: "text", text: message }], isError: true },
+				isError: true,
+			});
+			return { content: [{ type: "text", text: message }], isError: true };
 		}
 	};
 
