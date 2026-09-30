@@ -24,25 +24,28 @@
 
 ## 安装
 
-在任意目录下执行即可——脚本自己定位仓库，所以在哪个目录跑都不影响：
+在本仓库下执行：
 
 ```sh
-./scripts/install.sh
+omp install .
 ```
 
-它把扩展软链到 `~/.omp/agent/extensions/`，随后**校验**软链可解析、且入口点 import 的模块都在——装坏了会当场报错，而不是留下一个永远起不来的桥。
-
-> 不要用 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 代替。那条命令只在 `$PWD`
-> 恰好是仓库根目录时有效；换个目录执行就会链到一个不存在的路径，桥静默地不启动。
-
-其他子命令：
+它会把仓库软链到 `~/.omp/plugins/node_modules/pi-a2a-ext` 并注册；`package.json`
+里的 `pi.extensions` 字段就是告诉 omp 该加载哪个入口文件的，**不要删掉它**。
+卸载：
 
 ```sh
-./scripts/install.sh --status     # 只报告安装状态，不做任何改动（坏了则非零退出）
-./scripts/install.sh --uninstall   # 删掉软链；token 配置与审计日志保留
+omp plugin uninstall pi-a2a-ext
 ```
 
-要装到 `~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
+若不想用 omp 的插件管理器，`./scripts/install.sh` 做同样的事——直接软链到
+`~/.omp/agent/extensions/`，并额外校验软链可解析、且入口 import 的模块齐备。它
+支持 `--status`（只报告状态，坏了非零退出）与 `--uninstall`；要装到
+`~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
+
+> 这两种方式都**不要**用 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 代替。那条
+> 命令只在 `$PWD` 恰好是仓库根目录时有效；换个目录执行就会链到一个不存在的路径，
+> 桥静默地不启动。
 
 启动宿主 omp 后，通知栏显示：
 

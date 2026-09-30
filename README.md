@@ -24,30 +24,30 @@ remote omp (MCP client)                 host omp (MCP server)
 
 ## Install
 
-From anywhere — the script locates the repo itself, so it does not matter which
-directory you run it in:
+From this repo:
 
 ```sh
-./scripts/install.sh
+omp install .
 ```
 
-It symlinks the extension into `~/.omp/agent/extensions/`, then verifies the link
-resolves and that the modules the entry point imports are present, so a broken
-install fails loudly instead of leaving you with a bridge that never starts.
-
-> Do not replace this with a bare `ln -s "$PWD/extensions/a2a-bridge.ts" ...`.
-> That one-liner only works when `$PWD` happens to be the repo root; run it from
-> anywhere else and it silently links a path that does not exist, and the bridge
-> simply never comes up.
-
-Other subcommands:
+That links the repo into `~/.omp/plugins/node_modules/pi-a2a-ext` and registers
+it; the `pi.extensions` field in `package.json` is what tells omp which entry
+file to load, so do not remove it. To remove it again:
 
 ```sh
-./scripts/install.sh --status     # report install state, change nothing (non-zero if broken)
-./scripts/install.sh --uninstall   # remove the symlink; the token config and audit log are kept
+omp plugin uninstall pi-a2a-ext
 ```
 
-Set `OMP_AGENT_DIR` to install somewhere other than `~/.omp/agent`.
+If you would rather not use omp's plugin manager, `./scripts/install.sh` does the
+same job by symlinking straight into `~/.omp/agent/extensions/`, and additionally
+verifies the link resolves and the modules the entry point imports are present.
+It takes `--status` (report state, non-zero if broken) and `--uninstall`; set
+`OMP_AGENT_DIR` to target somewhere other than `~/.omp/agent`.
+
+> Do not replace either of these with a bare
+> `ln -s "$PWD/extensions/a2a-bridge.ts" ...`. That one-liner only works when
+> `$PWD` happens to be the repo root; run it from anywhere else and it silently
+> links a path that does not exist, and the bridge simply never comes up.
 
 After starting the host omp, the notification bar shows:
 
