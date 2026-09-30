@@ -1,5 +1,5 @@
 node_modules/
-website/.docusaurus/
-website/build/
+website/.vitepress/cache/
+website/.vitepress/dist/
 website/content/
 .qoder/

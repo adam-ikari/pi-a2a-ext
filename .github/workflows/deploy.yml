@@ -27,11 +27,11 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install
       - run: bun run build
-      # Config reads GITHUB_REPOSITORY to derive url/baseUrl for project pages.
+      # VitePress config reads GITHUB_REPOSITORY to derive `base` for project pages.
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website/build
+          path: website/.vitepress/dist
 
   deploy:
     needs: build
