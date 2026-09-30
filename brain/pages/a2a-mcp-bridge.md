@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-30T04:26:43"
+updated: "2026-09-30T04:46:48"
 ---
 
 <!-- compiled_truth -->
@@ -80,6 +80,19 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 **文档站仍然渲染中文**：`website/scripts/sync.mjs` 改为读 `README_ZN.md`（不是 README.md），并剥掉那行语言切换（站点单语言，站点内不需要切换入口）；标题仍是「使用指南」。若改成读 README.md，站点会在中文导航「指南」下显示英文，且 `[English](README.md)` 会指向站外不存在的路径。
 
 **教训（与 brain 里那 3 处 README 行号引用同源）**：文档之间**不要用行号互引**——README 改一次行号就全断。Q3 段落里原有 `README:103` / `README:105` 两处硬编码行号，已在 compiled_truth 内改为章节引用（「审批 / Approval」）。但 timeline 里的 3 处（append-only，历史证据）**故意保留行号不改**：timeline 记录的是「当时的事实」，改它就是篡改证据；这 3 处的失效不影响任何人，因为它们描述的是 2026-09-24 那天的状态。
+
+
+## 安装方式（2026-09-30 更正）
+
+唯一受支持的方式是 `scripts/install.sh`（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
+
+**此前 README 的 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 是错的**：该写法依赖调用者的 `$PWD` 恰为仓库根目录，换个目录执行就会链到不存在的路径（实测 `cd /tmp` 后链成 `/tmp/extensions/a2a-bridge.ts`），宿主加载失败但**没有任何用户可见报错**——桥只是永远不出现。**教训：文档里给出的命令若隐含「你得先 cd 到某处」这个前提而不校验，用户会踩到静默失败；安装脚本应自己推导路径并在结束时校验。**
+
+顺带更正两条同样无效的旧说法：
+- **`package.json` 的 `"pi": { "extensions": [...] }` 字段是无效的**（已从 package.json 删除）。`omp plugins list` 只列出**已安装的 npm 插件**，不读取本地 package.json 的该字段。此前 README 说的「或把本仓库作为插件」从来不可用。
+- 扩展入口 import 的是 `../src/*.ts`，但**这不构成安装障碍**：Bun 解析相对导入前先 `realpath` 软链，因此单文件软链能正确落到仓库的 `src/`（实测 `~/.omp/agent/extensions/a2a-bridge.ts` → repo `extensions/` → `../src/server.ts` 存在，宿主实测正常起桥）。曾误判此处会断链，**靠实际安装+启动宿主才确认它其实可用**。
+
+脚本自身的两个非显然细节：`--status` 判活必须用 `readlink` 原始目标 + `[ -e ]`，**不能用 `readlink -f`**——后者对悬空软链输出空串并非零退出，会让断链显示成「已安装」。安装目标若是真实文件（用户自己的扩展）一律拒绝覆盖。
 
 
 ## Timeline
@@ -256,4 +269,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "README.md 改写为英文（新增 fileguard/filetools 两行文件布局、补 test:files 命令），README_ZN.md 承接中文并加语言切换；sync.mjs 改读 README_ZN.md 且剥掉切换行（曾因正则未跨行匹配而漏剥，已修 m 标志）。brain compiled_truth 内 2 处 README 硬编码行号改为章节引用，timeline 内 3 处按 append-only 保留。验证：website build SUCCESS 且站点 intro 仍为中文、链接全部 ./ 形式无断链。"
   source: "双语 README + 站点构建 2026-09-30"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T04:46:48
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "安装方式更正轮 2026-09-30（install.sh + 两条无效旧说明作废）"
   affects: [a2a-mcp-bridge]
