@@ -5,18 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-09-29T00:56:21"
----
-
-<!-- compiled_truth -->
----
-id: a2a-mcp-bridge
-title: A2A MCP bridge architecture
-category: decision
-status: active
-tags: [omp, extension, mcp]
-created: "2026-09-10T09:16:34"
-updated: "2026-09-26T16:30:22"
+updated: "2026-09-30T02:51:51"
 ---
 
 <!-- compiled_truth -->
@@ -61,6 +50,27 @@ Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — m
 
 
 - Version state 2026-09-28: host omp upgraded to 18.4.0; node_modules again drifted ahead of lock via the same unknown mechanism (installed 18.4.0 vs lock/pin 18.3.2). Guard caught it; pins synced to 18.4.0, lockfile rewritten. Regression on 18.4.0 all green: tsc 0 errors, unit 59/59, biome clean, SMOKE OK (21 tools), HARDEN OK 29/29, approval probe VERDICT B (bash hung 90s, no side effect, server alive, audit start=1 done=0). pin==host invariant current value = 18.4.0.
+
+
+
+## Q8 修订 — 文件面代码评审修复（2026-09-30）
+
+评审发现 4 项文件面缺陷 + 1 项版本漂移，全部修复并加了回归测试。逐项的「为什么」比「改了什么」更重要，因为它们都是**评审读不出来、只有探针能抓**的：
+
+- **分块写入必须串行 + 重传必须幂等**（P1，唯一的数据完整性问题）。旧实现读 `expectedSeq` 校验、却在 `await appendPart` 之后才自增——同一 seq 的两个并发请求都能过校验并都写入；未声明 `totalBytes` 时 `put_end` 报**成功**而文件已是双倍内容。**根因是需求自身矛盾**：README 要求调用方自设超时（无 UI 时 `prompt` 审批挂起 ≥90s），而超时重试正好并发打出两个相同 seq。修法不是「拒绝重试」，而是承认重试是常规动作：同一 transfer 的变更步骤（`put_chunk`/`put_end`）走一条 Promise 链串行化，同 seq 同字节按已收处理（返回 `duplicate: true`），同 seq 换内容才 `bad_chunk_order`。队列吞掉拒绝，单步失败不卡死后续分块。**教训：「调用方必须自设超时」这个文档承诺，同时规定了幂等性要求**——写下前一句就得写下后一句。
+- **串行化自己又带进第二个竞态：排队中的步骤必须重验活性**（P1，评审修复之后才由对抗探针抓到）。`requireTransfer` 在**同步**阶段取出记录，而变更本体稍后才在队列上跑；两者之间若一次 `put_end` 成功提交并已 `rename` 走暂存文件，排队中的 `put_chunk` 就往一条**已被改名掉的死路径**上 append——`appendFile` 会重新创建该文件，返回 `{"ok":true,"receivedBytes":12}` 而已提交文件仍只有前 8 字节：**字节静默丢失**，且在 `.tmp` 留下一份永远无人回收的孤儿 `.part`。修法：`Transfer` 自带 `id`，串行步骤内先 `requireLive(tr)`（比对 map 里仍是同一条记录）再动手。**教训：把「检查」与「动作」拆到两个时序阶段（同步取记录 / 异步执行动作）时，前者的结论会过期——凡是这种形状，异步动作开头都要重验一次。修完 P1 要立刻重新对抗，因为修复本身会制造新的竞态。**
+- **状态受会话约束 ≠ 字节受会话约束**（P2）。传输绑定 `Mcp-Session-Id`，但暂存字节就是 `<root>/.tmp/<uuid>.part` 普通文件；`.tmp` 只在 `list(".")` 被过滤，直接按路径访问不受限，于是任何客户端都能枚举他人 `transferId`、读取在途字节、`put` 改写其暂存文件让对方 `put_end` 落成攻击者字节。修法：首段为 `.tmp` 一律 `invalid_path`（嵌套 `sub/.tmp/x` 合法）。**凡是「按 id 授权」的状态，旁边一定还挂着一条按路径可达的数据路径**——两者都要封。
+- **错误码契约必须覆盖兜底分支**（P2）。`guarded` 只翻译 `FileOpError`，其余原样抛出并被 `bridge.ts` 当工具结果文本返回，于是 `ENOTDIR`/`EISDIR` + 宿主绝对路径直达调用方：既违反本项目自己的「500 body 不得泄露宿主内部」立场，又让按 `a2a_file_error <code>` 解析的客户端失效。修法：兜底码 `io_error` + 固定无路径文案，细节只进宿主 stderr。**协议里承诺了「一律是 `<code>`」，就必须给「非预期异常」也留一个码。**
+- **`get` 的 sha256 语义要选对层**（P3）。旧实现每页重算**整文件**哈希：100MB（默认 `maxFileBytes`）实测 30.4s 纯哈希 / 400 页，而每页只传 256KB——读放大 400 倍且随文件平方增长，正好卡在协议自己宣传的大文件场景上。改为**本次区间**摘要（0.9s）。`totalBytes` 仍表整文件大小，两者分工写进 protocol.md。
+- **`list` 也要拒符号链接**（P3）。只过滤了子项，目标本身用 `stat`（跟随）检查，根外目录的文件名/大小/mtime 因此泄露；内容始终被 `resolveInRoot` 的 realpath 包含性挡住，故此前仅元数据泄露。
+
+## 版本漂移的第四次复发与强制关口（2026-09-30）
+
+node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin 仍 18.4.0），版本守卫如期捕获，pin+lock 同步至 18.4.4。三次复发后加了 `.github/workflows/ci.yml`（`bun install` + typecheck + lint + test）：CI 下 frozen-lockfile 安装把「pin 与 lockfile 不一致」提前到**提交时**失败，而不是等到某人下次跑 `bun test` 才发现。**靠单测事后捕获一个反复复发的不变量，是把守卫放在了太靠后的位置。**
+
+## 方法论：这份代码要靠探针评审，不能靠读
+
+100 个单测全绿时，上述缺陷**全部存在**。逐条静态阅读都能自圆其说——`.tmp` 只在 `list(".")` 过滤看起来是「已隐藏」，`stat` 看起来是「常规存在性检查」，每页算哈希看起来是「顺手给出完整性」。它们只在**跨进程/并发的实际调用**下暴露。这与既有记录一致（`put_end` 不建父目录也是真实宿主探针抓到的，单测当时全绿）。更要紧的是第二轮的教训：**P1 修完立刻又用对抗探针（8 路同 seq、200 块长传输、40 路并发 start、排队 vs 提交）打了一遍，才抓到修复自身引入的活性竞态**——第一轮的全绿并不代表修复没有副作用。评审这类文件面/并发代码：先写复现探针再下结论，修完再打一轮对抗，单测全绿不构成正确性证据。
 
 
 ## Timeline
@@ -213,4 +223,16 @@ Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — m
   kind: evidence
   summary: "文件传输验证基线（宿主 omp 18.4.0）：单测 59→100/100 绿（fileguard 16、filetools 18、bridge 桥工具与脱敏 4、config fail-closed 3）；新增真实宿主探针 test/file-transfer.ts（bun run test:files，54 项 → FILES OK），smoke（现 27 工具，含 6 个 a2a_file_*）、HARDEN 29/29、approval VERDICT B（挂起语义与两阶段审计跨版本未变）全绿。方法论再次生效：put_end 不创建目标父目录（分块上传到不存在的子目录时 rename ENOENT）是**宿主探针**抓到的，单测当时只用顶层路径故全绿——文件面改动必须跑 test:files，不能只信 bun test。另两处非代码坑：(1) website/scripts/sync.mjs 的链接改写用的是 String.replace（只换首个），README 第二次引用同一文档即留下仓库相对路径 → Docusaurus 断链构建失败，已改 replaceAll；(2) 版本守卫比对宿主版本的用例外设 30s 超时——omp --version 冷启动实测约 8s，恒超 bun 默认 5s 会偶发失败。"
   source: "bun test + 四件宿主探针 2026-09-29"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T02:51:35
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "代码评审修复轮 2026-09-30（探针驱动，含修复自身引入的活性竞态）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-09-30T02:51:51
+  kind: evidence
+  summary: "第二轮对抗测试（18 项）抓到 1 个**修复自身引入**的 P1：串行化后排队中的 put_chunk 会在 put_end 已 rename 走暂存文件后往死路径 append，报 ok 但字节静默丢失并留下无人回收的孤儿 .part；修法为串行步骤内 requireLive(tr) 重验活性（Transfer 自带 id）。同时发现我自己的 3 处探针断言写错（okPayload 返回 null 非 undefined；传输已满是 size_mismatch 非 bad_chunk_order；串行化后乱序 seq 是被拒而非被吸收），均为断言错非代码错——再次印证探针会纠正评审者。基线：单测 110→114，宿主四件套全绿（FILES OK 62/62、SMOKE OK、HARDEN OK 29/29、approval VERDICT B）。"
+  source: "对抗探针 + 四件宿主探针 2026-09-30"
   affects: [a2a-mcp-bridge]
