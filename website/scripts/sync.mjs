@@ -62,8 +62,8 @@ layout: home
 
 hero:
   name: omp A2A Bridge
-  text: 把运行中的 omp 变成一个 Streamable HTTP MCP 服务器
-  tagline: MCP · protocol 2025-11-25 · zero-dep Bun.serve
+  text: 让另一台机器直接调用本机会话的工具
+  tagline: 装上扩展，运行中的 omp 就多了一个 MCP 接口；远程 omp 配上地址即可调用本机的真实工具与文件，宿主不做模型推理，不消耗 token。
   actions:
     - theme: brand
       text: 快速开始
