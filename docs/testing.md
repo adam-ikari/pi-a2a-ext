@@ -7,10 +7,13 @@
 | `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 54 pass / 0 fail（5 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
-| `bun run test:approval` | 审批边界判别核验，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
+| `cd website && bun run check` | 站点渲染与 SEO 核验，28 项 | 否 | `render-check: all pages OK` |
+| `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:install` | 发布包自包含核验，17 项 | 否 | `PACKAGE OK` |
 
-统一前置（E2E 三件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。三者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（核验失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（E2E 三件套）：PATH 上有 `omp`（或设 `OMP_BIN`）。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。三者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（核验失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+
+三个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
 ## `test:install` — 发布包自包含核验（17 项）
 

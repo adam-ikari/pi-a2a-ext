@@ -26,5 +26,72 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       # Includes test/versions.test.ts, which hard-asserts installed == pin.
-      # The host-omp comparison inside it warns only (no omp on CI runners).
+      # The host-omp comparison inside it warns only (no omp in this job).
       - run: bun test
+
+  # The real-host probes. These boot an actual omp and drive the bridge over
+  # MCP, so they are the only checks that exercise the real execution path.
+  # They used to be unrunnable off a developer machine: each one copied
+  # ~/.omp/agent/models.yml, i.e. a real provider and a real API key. The bridge
+  # runs tools and never calls a model, so a placeholder provider is enough for
+  # the host to boot — see test/harness.ts.
+  host-probes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      # The host binary, at the version this repo pins in devDependencies. The
+      # extension is typechecked against that same version and imports
+      # @oh-my-pi/* through the host's runtime shim, so the probes must run
+      # against the pinned version rather than whatever is newest. Read from
+      # package.json so this cannot drift from the pin silently.
+      - name: Read the pinned host version
+        id: pin
+        run: |
+          v=$(node -p "require('./package.json').devDependencies['@oh-my-pi/pi-coding-agent']")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "pinned host omp: $v"
+      - name: Install the host omp
+        run: bun add --global "@oh-my-pi/pi-coding-agent@${{ steps.pin.outputs.version }}"
+      - name: Host version
+        run: omp --version
+      - run: bun install
+      # test/versions.test.ts compares the installed devDeps against this omp's
+      # own version and warns on a mismatch; run it here too so a drifted pin
+      # surfaces in the job that actually has a host to compare against.
+      - run: bun test
+      - run: bun run typecheck
+
+      # Each probe is its own step so a failure names the one that broke.
+      # test:approval takes ~95s on purpose: it holds a bash call open until the
+      # caller's own timeout fires, and that hang is the behaviour under test.
+      - name: test:smoke — real-host E2E
+        run: bun run test:smoke
+      - name: test:hardening — auth, sessions, audit
+        run: bun run test:hardening
+      - name: test:install — published package self-containment
+        run: bun run test:install
+      - name: test:approval — approval boundary (expects VERDICT B)
+        run: bun run test:approval
+
+  site:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install
+      - run: bun run build
+      # The mermaid diagrams render client-side, so a green build does not prove
+      # they appear. Load the built site in a real browser and assert on the text
+      # inside the rendered SVG. Also checks per-page canonical / og:image /
+      # twitter:card / JSON-LD.
+      - run: bun run check

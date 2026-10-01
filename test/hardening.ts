@@ -1,6 +1,6 @@
 /**
- * Real-host hardening verification (manual: bun run test:hardening; requires
- * local omp + ~/.omp/agent/models.yml).
+ * Real-host hardening verification (bun run test:hardening; requires the omp
+ * binary, no model credentials — see harness.ts).
  * Boots omp with the a2a extension and asserts the review fixes against the
  * LIVE server: auth placement, mandatory session id, version negotiation,
  * catalog exposure gate, healed 0600 token, and the two-phase audit log.
@@ -8,7 +8,6 @@
  */
 import { spawn } from "node:child_process";
 import {
-	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -21,6 +20,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { seedModels } from "./harness.ts";
 
 const REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
 const tmp = mkdtempSync(join(tmpdir(), "a2a-harden-"));
@@ -57,12 +57,9 @@ probe.stop(true);
 // while keeping our fixed port.
 writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1" }, null, 2));
 
-const realModelsYml = join(process.env.HOME ?? "", ".omp", "agent", "models.yml");
-if (!existsSync(realModelsYml)) {
-	console.error(`FAIL: no model config at ${realModelsYml}`);
-	process.exit(1);
-}
-copyFileSync(realModelsYml, join(agentDir, "models.yml"));
+// A placeholder provider is enough: the bridge runs tools, it never calls a
+// model, so the host only needs *some* model config to boot.
+console.log(seedModels(agentDir));
 
 const child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc"], {
 	env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath },

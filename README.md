@@ -213,9 +213,9 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
-bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
-bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
-bun run test:approval  # approval-boundary discriminating check, ~2 minutes (needs a local omp; run manually)
+bun run test:smoke    # real E2E (needs a local omp; no model credentials)
+bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
+bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:install  # published-package self-containment check, 17 items (npm pack + import graph; no host needed)
 ./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`

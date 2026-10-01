@@ -1,6 +1,6 @@
 /**
- * Approval-boundary probe (manual: bun run test:approval; ~2 min; requires
- * local omp + ~/.omp/agent/models.yml).
+ * Approval-boundary probe (bun run test:approval; ~2 min; requires the omp
+ * binary, no model credentials — see harness.ts).
  *
  * Discriminates the behavior of a `prompt`-tier tool call (bash) arriving in
  * rpc mode, where the host has no interactive UI to answer the approval:
@@ -20,7 +20,6 @@
  */
 import { spawn } from "node:child_process";
 import {
-	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -32,6 +31,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { seedModels } from "./harness.ts";
 
 const REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
 const tmp = mkdtempSync(join(tmpdir(), "a2a-apv2-"));
@@ -51,8 +51,9 @@ const PORT = probe.port ?? 0;
 probe.stop(true);
 writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1" }, null, 2));
 
-const realModels = join(process.env.HOME ?? "", ".omp", "agent", "models.yml");
-copyFileSync(realModels, join(agentDir, "models.yml"));
+// Placeholder provider: this probe hangs a bash call on the host's approval
+// prompt, which never reaches a model either.
+seedModels(agentDir);
 
 const t0 = Date.now();
 const stage = (msg: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);

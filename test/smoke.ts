@@ -4,19 +4,10 @@
  * the real Main session. Prints "SMOKE OK" on success.
  */
 import { spawn } from "node:child_process";
-import {
-	copyFileSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { seedModels } from "./harness.ts";
 
 const REPO = resolve(import.meta.dir, "..");
 const tmp = mkdtempSync(join(tmpdir(), "a2a-smoke-"));
@@ -44,16 +35,12 @@ probe.stop(true);
 const cfg = { port: PORT, token: TOKEN, host: "127.0.0.1" };
 writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
 
-// omp refuses to boot without any model auth. Copy the developer's real
-// models.yml (provider/api-key catalog) into the temp HOME so the session —
-// and hence the extension's session_start — actually runs. Nothing else
-// from the real HOME is shared.
-const realModelsYml = join(process.env.HOME ?? "", ".omp", "agent", "models.yml");
-if (existsSync(realModelsYml)) {
-	copyFileSync(realModelsYml, join(agentDir, "models.yml"));
-} else {
-	fail(`no model config at ${realModelsYml}; cannot boot omp`);
-}
+// omp refuses to boot without model configuration, so the session (and hence
+// the extension's session_start) needs a models.yml. It does not need a
+// *working* one — the bridge never calls a model, it only runs tools. The
+// placeholder provider is unreachable on purpose, so no probe path touches the
+// network. Nothing else from the real HOME is shared.
+console.log(seedModels(agentDir));
 
 const OMP_BIN = process.env.OMP_BIN ?? "omp";
 const child = spawn(OMP_BIN, ["--mode", "rpc"], {
