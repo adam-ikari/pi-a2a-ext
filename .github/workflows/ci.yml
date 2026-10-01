@@ -95,16 +95,28 @@ jobs:
       # inside the rendered SVG. Also checks per-page canonical / og:image /
       # twitter:card / JSON-LD.
       #
-      # The probe resolves a browser by candidate list (or CHROME). Installing
-      # playwright's chromium and pointing CHROME at it is deliberate: the
-      # runner image's own chromium/Chrome is not guaranteed, and a browser that
-      # silently returns an empty DOM makes every diagram assertion false — the
-      # probe's control request now catches that and says so.
+      # The probe resolves a browser by candidate list, or CHROME.
+      #
+      # Why an explicit install: a browser that aborts leaves an EMPTY DOM, which
+      # reads as "the diagram did not render" — three phantom failures. That is
+      # exactly how the first version of this job died. The probe now issues a
+      # control request first and reports a broken harness distinctly, but it
+      # still needs a browser that actually runs.
+      #
+      # The underlying cause on CI was chrome aborting on shared memory
+      # ("Unable to access(W_OK|X_OK) /dev/shm"), not a missing binary. The
+      # probe's --disable-dev-shm-usage is what survives that; the install below
+      # is about the binary, the flag about surviving without /dev/shm.
       - name: Install chromium
         run: bunx --bun playwright install --with-deps chromium
       - name: Point the probe at it
         run: |
-          CHROME=$(ls -d "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)
+          CHROME=$(find "$HOME/.cache/ms-playwright" -type f -name chrome -perm -u+x | head -1)
+          if [ -z "$CHROME" ]; then
+            echo "no chromium binary under $HOME/.cache/ms-playwright" >&2
+            find "$HOME/.cache/ms-playwright" -maxdepth 3 >&2
+            exit 1
+          fi
           echo "CHROME=$CHROME" >> "$GITHUB_ENV"
           "$CHROME" --version
       - run: bun run check
