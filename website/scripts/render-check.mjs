@@ -65,13 +65,21 @@ await new Promise((r) => srv.listen(0, "127.0.0.1", r));
 const port = srv.address().port;
 
 // The binary is named differently everywhere: `chromium-browser` on this
-// machine, `chromium` and `google-chrome` on GitHub's ubuntu runners. Resolving
-// by candidate list (or CHROME) is what keeps `bun run check` from failing the
-// deploy step for a missing executable rather than for a real defect.
+// machine, `chromium` on Debian-ish systems, and GitHub's runner images ship
+// Google Chrome under /opt/hostedtoolcache — which is not on PATH-lookup's
+// usual prefixes, so a hardcoded /usr/bin scan misses it entirely. Search the
+// paths each of them actually lives in, and let PATH decide too.
+const CANDIDATE_DIRS = [
+	"/usr/bin",
+	"/usr/local/bin",
+	"/opt/google/chrome",
+	"/opt/hostedtoolcache/stable/google-chrome",
+	"/snap/bin",
+];
 const BROWSER =
-	process.env.CHROME ??
-	["chromium-browser", "chromium", "google-chrome"].find(
-		(bin) => existsSync(`/usr/bin/${bin}`) || existsSync(`/usr/local/bin/${bin}`),
+	process.env.CHROME ||
+	["google-chrome", "chromium-browser", "chromium", "chrome"].find((bin) =>
+		[...CANDIDATE_DIRS.map((d) => `${d}/${bin}`), bin].some((p) => existsSync(p)),
 	);
 if (!BROWSER) {
 	console.error(

@@ -95,28 +95,26 @@ jobs:
       # inside the rendered SVG. Also checks per-page canonical / og:image /
       # twitter:card / JSON-LD.
       #
-      # The probe resolves a browser by candidate list, or CHROME.
+      # The probe resolves a browser itself: CHROME, else the first of
+      # google-chrome / chromium-browser / chromium that exists. GitHub's runner
+      # images ship Google Chrome pre-installed (under /opt/hostedtoolcache,
+      # which is why the probe scans more than /usr/bin), so nothing is installed
+      # here.
       #
-      # Why an explicit install: a browser that aborts leaves an EMPTY DOM, which
-      # reads as "the diagram did not render" — three phantom failures. That is
-      # exactly how the first version of this job died. The probe now issues a
-      # control request first and reports a broken harness distinctly, but it
-      # still needs a browser that actually runs.
+      # The first version of this job installed Playwright's chromium and hung
+      # for 30+ minutes on `--with-deps` (apt). The second installed it without
+      # --with-deps, got the binary, and still saw an empty DOM — because the
+      # probe's control request reported a broken harness rather than three
+      # phantom diagram failures, but the underlying browser never ran.
       #
-      # The underlying cause on CI was chrome aborting on shared memory
-      # ("Unable to access(W_OK|X_OK) /dev/shm"), not a missing binary. The
-      # probe's --disable-dev-shm-usage is what survives that; the install below
-      # is about the binary, the flag about surviving without /dev/shm.
-      - name: Install chromium
-        run: bunx --bun playwright install --with-deps chromium
-      - name: Point the probe at it
+      # If a future image ships no browser at all, the probe says so by name
+      # ("tried chromium-browser, chromium, google-chrome") instead of silently
+      # reporting every diagram as broken.
+      - name: Show which browser the probe will use
         run: |
-          CHROME=$(find "$HOME/.cache/ms-playwright" -type f -name chrome -perm -u+x | head -1)
-          if [ -z "$CHROME" ]; then
-            echo "no chromium binary under $HOME/.cache/ms-playwright" >&2
-            find "$HOME/.cache/ms-playwright" -maxdepth 3 >&2
-            exit 1
-          fi
-          echo "CHROME=$CHROME" >> "$GITHUB_ENV"
-          "$CHROME" --version
+          for b in google-chrome chromium-browser chromium; do
+            if command -v "$b" >/dev/null; then echo "using $b: $(command -v "$b")"; exit 0; fi
+          done
+          echo "none of google-chrome / chromium-browser / chromium is present" >&2
+          exit 1
       - run: bun run check
