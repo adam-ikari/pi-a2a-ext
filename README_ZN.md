@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-装上这个扩展后，正在运行的 omp 就多了一个 MCP 服务器接口。另一台机器上的 omp 配上这个地址，就能调用这边会话里的工具（read、bash、edit 等），执行的就是本机的真实文件和 shell 环境。宿主不做模型推理，只负责收请求、跑工具、回结果，因此不消耗 token。
+这个扩展在宿主 `session_start` 时起一个 MCP 服务器接口（MCP `2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`）。远程 omp 的 `mcp.json` 指向它，即可调用宿主 `Main` 会话里的工具（`read`/`bash`/`edit`…），执行落在宿主真实的文件与 shell 上。宿主不做模型推理——收请求、跑工具、回结果，不消耗 token。
 
 ## 工作原理
 

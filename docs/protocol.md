@@ -99,6 +99,36 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 - 每次 `tools/call`（包括被拒绝的）都写一对审计记录，见 README「审计日志」。
 - `params.name` 缺失按空串处理（走向出口 2）。
 
+下面的时序图是 `tools/call` 的一次完整往返，含受控端 TUI 的显示与审计：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 远程 omp<br/>MCP client
+    participant B as 桥<br/>server.ts + bridge.ts
+    participant S as Main 会话
+    participant T as 宿主工具
+    participant U as 受控端 TUI
+    participant A as 审计日志
+
+    C->>B: POST /tools/call<br/>Bearer token + mcp-session-id
+    B->>B: 鉴权 · 查会话 · 查暴露
+    alt 未暴露 / deny
+        B-->>C: 200 isError=true<br/>"not exposed"
+    else 审批挂起（无 UI + prompt 档）
+        B-->>C: 无响应（挂起，调用方自设超时）
+    else 正常执行
+        B->>U: emitExternalEvent(tool_execution_start)
+        B->>S: getToolByName(name).execute()
+        S->>T: 执行真实工具
+        T-->>S: AgentToolResult
+        S-->>B: 结果
+        B->>U: emitExternalEvent(tool_execution_end)
+        B->>A: 审计 start / done
+        B-->>C: 200 { content, isError }
+    end
+```
+
 ### 桥自带工具：文件传输
 
 桥自己贡献 6 个工具，走同一条 `tools/list` / `tools/call` 管线（因此复用鉴权、会话、`deny` 门禁与两阶段审计），线格式采用 A2A FilePart 的 `{ name, mimeType, bytes(base64) }`。所有 `path` 都相对配置项 `fileRoot`（沙箱根），**不**是宿主文件系统路径。

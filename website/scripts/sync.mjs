@@ -62,8 +62,8 @@ layout: home
 
 hero:
   name: omp A2A Bridge
-  text: 让另一台机器直接调用本机会话的工具
-  tagline: 装上扩展，运行中的 omp 就多了一个 MCP 接口；远程 omp 配上地址即可调用本机的真实工具与文件，宿主不做模型推理，不消耗 token。
+  text: 另一台机器直接调用本机会话的工具
+  tagline: 装上即多一个 MCP 接口。远程 omp 的 mcp.json 指向它，即可调用宿主 Main 会话里的工具，执行落在宿主真实的文件与 shell 上；宿主不做模型推理，不消耗 token。
   actions:
     - theme: brand
       text: 快速开始

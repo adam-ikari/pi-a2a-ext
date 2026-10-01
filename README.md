@@ -2,7 +2,7 @@
 
 [简体中文](README_ZN.md)
 
-With this extension, a running omp also exposes an MCP server endpoint. A remote omp pointed at it can call the tools in this session (read, bash, edit, …), running against this machine's real files and shell. The host does no model inference — it takes the request, runs the tool, returns the result — so no tokens are spent.
+The extension starts an MCP server endpoint on the host's `session_start` (MCP `2025-11-25`, Streamable HTTP, bound to `127.0.0.1` by default). A remote omp points its `mcp.json` at it and can then call the tools of the host's `Main` session (`read`/`bash`/`edit`…), running against the host's real files and shell. The host does no model inference — takes the request, runs the tool, returns the result, spends no tokens.
 
 ## How it works
 
