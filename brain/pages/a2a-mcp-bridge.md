@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-01T13:49:26"
+updated: "2026-10-01T13:56:07"
 ---
 
 <!-- compiled_truth -->
@@ -400,4 +400,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: reversal
   summary: "推翻 Q4 的 deny/暴露交集与 Q8 的整个文件传输面——按「极简/不重复造轮子/不替 omp 实现沙盒/不替 omp 管权限」四条，桥缩回接口转换器：源码 1460 → 655 行。删 src/filetools.ts + src/fileguard.ts（675 行）与 6 个 a2a_file_*，删 deny/denyMCPTools 与 fileRoot/maxFileBytes。tools/list 改为 pi.getAllTools() 原样透传不过滤（含 hidden 工具、含宿主对自己模型禁用的工具）——omp 是什么权限桥就是什么权限，删掉的是第二套与宿主可冲突且无优先级的权限名单。**教训一：桥自带工具绕过宿主审批门，所以不得不自带沙箱——这是同一个决定的两个后果，要一起删，只删一个会留下「谁都不管」的洞。教训二：为已有能力（bash 的 cat/base64/ls/dd）造轮子的代价可量化——675 行实现 + 1216 行测试，且状态机自己生产了两个 P1（seq TOCTOU 写坏文件、串行化修复自身引入的活性竞态）。**"
   source: "极简化轮 2026-10-01"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-01T13:56:07
+  kind: evidence
+  summary: "发现 test:install 的隔离根本不成立（harness 缺陷，与代码无关）：探针只设 HOME=临时目录，但实测用一个全新空目录做 HOME，桥仍起来且仍广播「file transfer」——说明 omp 加载的是**真实 HOME** ~/.omp/plugins/node_modules/pi-a2a-ext 下 9-30 装的那份旧拷贝（grep a2a_file_ 有 1 处命中），而不是探针刚装进临时 HOME 的那份。设 OMP_PLUGIN_DIR 无效。后果：极简化提交后该核验报 FAIL，实际验的是旧插件。**教训：探针声称隔离某样东西时，要用「该物缺席」的反证测，不能只看它指向的目录。** 修复未做（独立议题）。"
+  source: "极简化轮 2026-10-01 复跑 install 核验"
   affects: [a2a-mcp-bridge]
