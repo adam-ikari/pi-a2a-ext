@@ -156,6 +156,31 @@ scp ./data.tar user@host:~/data.tar
 
 桥不设 `fileRoot`、不设 `deny`、不解释路径——执行落在宿主真实的文件与 shell 上，权限由宿主自己的配置决定（见「安全与边界」）。
 
+## 设备
+
+Agent 跑在服务器上、设备插在本机——中间的 USB 没人能跨。设备在宿主那边有两种形态，桥都原样透传。
+
+**工具链（`bash`）**。`adb`、`idf.py`、串口工具、烧录器都不是 omp 的工具，是本机上的命令。`bash` 在 `tools/list` 里，于是远程直接跑：
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "bash", "arguments": { "command": "adb devices -l" } } }
+```
+
+执行落在本机的 shell，PATH 上有什么就有什么——装了 Android SDK 就调得到 adb，ESP-IDF 装了就能 `idf.py flash`。端口监视、寄存器读写同理。
+
+**挂载设备（`xd://`）**。宿主把一些工具挂成虚拟设备，**它们不在 `tools/list` 里**，而是通过 `read` / `write` 的 `path` 参数驱动：
+
+```json
+{ "name": "read",  "arguments": { "path": "xd://" } }              // 列出挂载的设备
+{ "name": "read",  "arguments": { "path": "xd://debug" } }         // 取该设备的文档与 JSON schema
+{ "name": "write", "arguments": { "path": "xd://debug", "content": { … } } }  // 执行
+```
+
+清单由宿主运行时决定——装了哪些扩展、接了什么设备，就有什么。本机实测挂载的是 `xd://debug`（DAP 调试器）、`xd://lsp`、`xd://ast_edit`。
+
+**`tools/call` 直接叫 `xd://` 会被拒**（`not exposed`）：设备不是独立工具名，只有 `read` / `write` 的 `path` 能到达。这是宿主的形态，桥不改写它。
+
 ## 安全与边界
 
 - **token 即工具执行全权（默认配置下）**：宿主默认 `approvalMode: yolo`，拿到 token 就可在宿主会话里直接执行任意暴露的工具（含 `bash`），不经过任何审批；只有宿主把工具配成 `prompt` 才有审批门可拦（无 UI 时见审批节）。配置文件保持 `0600`，不要进版本库。

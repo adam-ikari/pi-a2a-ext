@@ -94,4 +94,17 @@ jobs:
       # they appear. Load the built site in a real browser and assert on the text
       # inside the rendered SVG. Also checks per-page canonical / og:image /
       # twitter:card / JSON-LD.
+      #
+      # The probe resolves a browser by candidate list (or CHROME). Installing
+      # playwright's chromium and pointing CHROME at it is deliberate: the
+      # runner image's own chromium/Chrome is not guaranteed, and a browser that
+      # silently returns an empty DOM makes every diagram assertion false — the
+      # probe's control request now catches that and says so.
+      - name: Install chromium
+        run: bunx --bun playwright install --with-deps chromium
+      - name: Point the probe at it
+        run: |
+          CHROME=$(ls -d "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)
+          echo "CHROME=$CHROME" >> "$GITHUB_ENV"
+          "$CHROME" --version
       - run: bun run check

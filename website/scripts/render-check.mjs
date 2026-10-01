@@ -52,8 +52,11 @@ const srv = createServer((req, res) => {
 				? `${direct}.html`
 				: direct;
 	if (!existsSync(file) || !statSync(file).isFile()) {
-		res.writeHead(404, { "content-type": "text/plain" });
-		return res.end("not found");
+		// Serve the real 404 page, as GitHub Pages does, so the control request
+		// below distinguishes "browser works" from "browser returned nothing".
+		const notFound = join(DIST, "404.html");
+		res.writeHead(404, { "content-type": "text/html" });
+		return res.end(existsSync(notFound) ? readFileSync(notFound) : "not found");
 	}
 	res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
 	res.end(readFileSync(file));
@@ -125,6 +128,22 @@ function diagramText(dom) {
 }
 
 let failed = 0;
+// Control: a page with no JavaScript at all. If this comes back empty, the
+// browser or the static server is the problem and every diagram result below is
+// meaningless — say that instead of reporting three phantom diagram failures.
+{
+	const control = await dumpDom("/__no_such_page__");
+	const ok = control.length > 0 && control.includes("Not Found");
+	if (!ok) {
+		console.error(
+			`render-check: harness is broken (control page returned ${control.length}B). ` +
+				"The browser or the static server did not run, so the diagram results below prove nothing.",
+		);
+		process.exit(2);
+	}
+	console.log(`OK   control    browser + static server respond (${control.length}B)\n`);
+}
+
 for (const { path, label } of PAGES) {
 	const dom = await dumpDom(path);
 	const hasSvg = /<div class="mermaid">[\s\S]*?<svg[\s\S]*?<\/svg>/.test(dom);

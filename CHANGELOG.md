@@ -2,6 +2,21 @@
 
 本项目暂无 git 标签/发布版本，按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-01 — 首页与指南改写痛点：远程够不到本地设备
+
+- fix: **CI 的 `site` job 红了**（上一提交引入）。headless 浏览器在 runner 上静默返回空 DOM（`dom=0B`），三个页面全被判 FAIL——而真因是浏览器没跑起来，不是图坏了。核验新增**控制项**：先请求一个不存在的页面（此时服务 404.html），控制项也空就以退出码 2 报「harness 坏了，下面的结果不作数」；顺带让 404 走真实的 `404.html`（此前是纯文本 `not found`）。CI 侧改为装 playwright 的 chromium 并用 `CHROME` 指过去，不再赌镜像自带哪个浏览器
+
+
+- docs: hero 与 feature 卡片此前全在讲「我是什么」（协议版本、端口、token），没有一句讲「你为什么来」。改为先说痛点：Agent 跑在服务器上、设备插在本机，中间的 USB 没人能跨；hero 改为「让远程的 agent 操作你本地的设备」，tagline 落到 adb / idf / 串口工具与宿主挂载的调试设备
+- docs: README（中英）新增「设备 / Devices」一节，并成为 feature 卡片「远程能碰到什么」的落点。两种形态都写清：**工具链走 `bash`**（adb、idf.py、烧录器不是 omp 的工具，是本机命令，PATH 上有什么就有什么）；**挂载设备走 `read` / `write` 的 `path`**（`read {"path":"xd://"}` 列清单，`write {"path":"xd://debug"}` 执行）
+- 全部结论实测，不是推断：
+  - 远程 `tools/call {"name":"bash","arguments":{"command":"adb version"}}` → 拿到本机 SDK 路径与 `Android Debug Bridge version 1.0.41`。通道通（该机当时未插设备，故 `adb devices` 为空）
+  - 远程 `read {"path":"xd://"}` → `isError=false`，返回 5 个挂载设备：`xd://debug`（DAP 调试器）、`xd://lsp`、`xd://ast_edit`、`xd://omniroute_status`、`xd://omniroute_sync`
+  - **`tools/call {"name":"xd://"}` 被拒**（`not exposed`）——设备不是独立工具名，只有 `read` / `write` 的 path 能到达。这是宿主的形态，桥不改写
+  - `tools/list` 里一个 `xd://` 都没有（21 个工具），所以「远程能碰设备」这件事在目录上完全看不出来，只在正文里讲
+- docs: feature 卡片顺手改掉三处已过期的描述（上一轮删掉的「6 个文件传输工具」「五个核验脚本」「跨机器安装」）
+- docs: OG 卡片同步为痛点表述
+
 ## 2026-10-01 — 三个真实宿主核验接入 CI
 
 - test: **核验不再需要模型凭据**。四个探针原先都拷 `~/.omp/agent/models.yml`（真实 provider + 真实 API key），这是它们只能在开发机上跑的原因。桥只跑工具、不推理，宿主启动只需要「有模型配置」——实测一个故意不可达的 provider 就能让宿主起来并把桥带起来。新增 `test/harness.ts` 提供该占位配置（`A2A_PROBE_REAL_MODELS=1` 可切回真实配置）

@@ -164,6 +164,31 @@ scp ./data.tar user@host:~/data.tar
 
 The bridge sets no `fileRoot`, no `deny` list, and does not interpret paths — calls land on the host's real files and shell, and the host's own configuration decides what is permitted (see "Security and boundaries").
 
+## Devices
+
+The agent runs on a server, the device is plugged into your machine, and nothing crosses the USB in between. The host exposes devices in two shapes, and both pass through unchanged.
+
+**Toolchains (`bash`).** `adb`, `idf.py`, serial tools and flashers are not omp tools — they are commands on this machine. `bash` is in `tools/list`, so a remote client runs them directly:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "bash", "arguments": { "command": "adb devices -l" } } }
+```
+
+Execution lands in the local shell, so whatever is on `PATH` is reachable: with the Android SDK installed, `adb` is callable; with ESP-IDF installed, `idf.py flash` is. Port monitors and register pokes work the same way.
+
+**Mounted devices (`xd://`).** The host mounts some tools as virtual devices. **They are not in `tools/list`** — they are driven through the `path` argument of `read` / `write`:
+
+```json
+{ "name": "read",  "arguments": { "path": "xd://" } }                    // list mounted devices
+{ "name": "read",  "arguments": { "path": "xd://debug" } }               // docs + JSON schema
+{ "name": "write", "arguments": { "path": "xd://debug", "content": { … } } }  // execute
+```
+
+The listing is decided by the host at runtime — it depends on which extensions are installed and which devices are attached. Measured on this machine: `xd://debug` (a DAP debugger), `xd://lsp`, `xd://ast_edit`.
+
+**Calling `xd://` directly through `tools/call` is refused** (`not exposed`): a device is not a tool name, and only the `path` of `read` / `write` reaches it. That is the host's shape; the bridge does not rewrite it.
+
 ## Security and boundaries
 
 - **The token is full tool-execution authority (under the default config)**: the host's default `approvalMode: yolo` means anyone holding the token can execute any exposed tool (including `bash`) directly in the host session with no approval step; only tools the host configures as `prompt` have a gate that can stop them (see [Approval](#approval) for the no-UI case). Keep the config file at `0600` and out of version control.
