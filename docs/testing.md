@@ -8,55 +8,27 @@
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `bun run test:approval` | 审批边界判别核验，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:install` | 跨机器安装核验，26 项 | 是 | `INSTALL OK` |
+| `bun run test:install` | 发布包自包含核验，17 项 | 否 | `PACKAGE OK` |
 
-统一前置（E2E 四件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（核验失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（E2E 三件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。三者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（核验失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-## `test:install` — 跨机器安装核验（26 项）
+## `test:install` — 发布包自包含核验（17 项）
 
-**唯一验证「任意机器可装」的核验**。`test:smoke` 自己把扩展软链进沙箱 agentDir，证明桥可用，但完全不碰安装链路；本核验走 `omp install <git-url>` 的真实路径。
-
-用独立 `HOME` 模拟另一台机器（除 `models.yml` 外一无所有），分组：
+**核验发布的 tarball 装得上去、且装完就能加载。** 三组：
 
 | 组 | 项数 | 断言 |
 | --- | --- | --- |
-| 安装 | 5 | 装进新机器的插件目录；manifest 带 `version`（否则 omp 显示 `@undefined`）；manifest 声明 `pi.extensions`（加载开关）；包内含 `src/` 与 `extensions/`（入口 import 的是 `../src/*.ts`，缺一则装上也起不来） |
-| 启动 | 4 | 宿主广播桥地址；首次启动自建 config 与该机器专属 token |
-| MCP 握手 | 4 | HTTP `initialize` 成功并签发会话；协商 2025-11-25；广播的 URL 正是远程客户端要连的那个；`tools/list` 只含宿主工具 |
-| 沙箱边界 | 4 | `.tmp` 不可寻址；宿主 fs 错误带 code；不泄露宿主路径；并发同 seq 只写一份 |
-| 鉴权 | 2 | 无 token → 401；无会话头 → 400 |
-| 审计 | 4 | 该机器上生成审计日志；start/done 配对；记录带 `sid`；不含原始 base64 |
+| manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
+| 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
+| 内容 | 8 | 入口 `extensions/a2a-bridge.ts` 与 5 个 `src/*.ts` 都在 tarball 里；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块） |
 
-默认装 `https://github.com/adam-ikari/pi-a2a-ext.git`，可用 `A2A_INSTALL_SPEC` 换成本地路径或 `.` 以测开发态。全过 → `INSTALL OK`；任何一项不过 → `FAIL: <label>` + exit 1。
+第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
-**写这些核验脚本时踩的两个坑（均为 harness 自身缺陷，非产品缺陷，但会让核验给出假阴性）**：
+**这一版不启动宿主、不碰 MCP 端点。** 上一版两样都做，但**验的是错的对象**：宿主解析插件目录不受 `HOME` 影响，临时 HOME 并未隔离插件发现——宿主继续加载真实 `~/.omp/plugins` 里那份，于是每一条「新机器」断言其实都在重测那份陈旧副本。`XDG_DATA_HOME`、`OMP_PLUGIN_DIR`、改 `cwd` 都试过，没有一个能改变插件发现。实测证据：往假 HOME 装一个只会打印标记的扩展，标记没出现，真实那份的桥却起来了。
 
-- `omp --mode rpc --print "<prompt>"` 跑完一轮即退出，**桥随之消失**，远程调用得到 `ConnectionRefused`。须用 `omp --mode rpc` 不传 prompt、stdin 保持打开。
-- 以 `proc.exitCode === null` 作轮询条件，会在最后一个 stdout 分片送达前提前退出，把「桥正常」误报为「桥没起来」。**最终改为直接 HTTP 探测**（真实客户端的做法），不再刮 stdout——`test:smoke` 一直是这么做的，所以没踩到。
+因此 **`omp install <git-url>` 的端到端（真机装 → 起宿主 → MCP 握手 → 文件往返）目前没有自动化覆盖**。恢复它要先搞清楚宿主的插件发现机制，那是独立任务；在这个核验里自己搭一层目录隔离，等于对别人的目录布局另立一套权威。
 
-## 单测矩阵（54 用例）
-
-| 文件 | 用例数 | 覆盖 |
-| --- | --- | --- |
-| `server.test.ts` | 20 | 鉴权放置（无/错 token 401、未鉴权 DELETE 401）、initialize 固定版本与会话签发、不回显客户端版本、会话强制（缺头 400、通知缺头 400、未知 404、TTL 刷新与过期清理、上限淘汰、DELETE 204 后即失效）、tools/list 无游标、tools/call 往返与抛错仍 200、未知方法 -32601、GET 405、非法 JSON / 非法 jsonrpc / batch 均 400 |
-| `auth.test.ts` | 11 | Bearer 解析、scheme 大小写、其他 scheme 拒绝、缺失/空凭据、等长同内容/异内容、**异长不抛异常**（timing-safe 的长度前置） |
-| `config.test.ts` | 12 | 缺文件默认值、round-trip、保存 0600、未知字段忽略、坏 JSON/非对象带路径抛错、port/host 类型或区间非法均 fail-closed、token 缺失/非法自愈并持久、token 32B base64url 且唯一 |
-| `bridge.test.ts` | 7 | 目录（**注册表原样透传不过滤**、每次调用重读以纳入动态工具）、暴露门（目录外的名字/别名一律 `not exposed`、无 Main 会话清晰报错）、审计（dispatch 写 start + 完成写 done 按 id 配对、被拒调用两相齐全、sid 归因、超长参数落盘为 `<len:N,sha256:…>` 且原始载荷不出现） |
-| `versions.test.ts` | 4 | 版本守卫：pi-* devDep 必须精确版本（无 `^`/`~`）、实装 == pin（硬断言）、两 pin 一致、`omp --version` ≠ pin 仅告警（omp 缺失时跳过） |
-
-审计断言通过 `A2A_BRIDGE_AUDIT` 沙箱化，单测不会写真实 `~/.omp`。
-
-## `test:smoke` — 真实宿主 E2E
-
-启动真实 `omp --mode rpc`（加载本扩展），用裸 `fetch` 走完整 MCP 流程：
-
-1. `initialize` → `protocolVersion` + `mcp-session-id` 响应头；
-2. `notifications/initialized` → 202；
-3. `tools/list` 含 `read`（并打印全量数量）；
-4. **`tools/call read` 落到真实 `Main` 会话**，结果必须含载荷文件首行内容；
-5. 未知工具 → `isError: true`；无 token → 401；未知方法 → `-32601`。
-
-任一步不符 → `FAIL: …`（附宿主 stdout/stderr 尾部）+ exit 1；全过 → `SMOKE OK`。
+全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
 ## `test:hardening` — 加固核验（29 项）
 

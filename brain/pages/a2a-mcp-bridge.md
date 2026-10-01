@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-01T14:44:25"
+updated: "2026-10-01T14:58:49"
 ---
 
 <!-- compiled_truth -->
@@ -412,4 +412,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "把本质需求与四条原则写进 AGENTS.md 与 README（中英），此前它们只存在于对话里。**本质需求：复用本机已经跑着的那个 omp**——任意 MCP 客户端把 mcp.json 指向端点即可调用它的工具，调用落在宿主 Main 会话的真实文件与 shell 上。桥只负责把调用送到，不在途中加意思。四条原则由这一句推出：不重复造轮子 / 不替 omp 实现沙盒 / 不按权限过滤（tools/list 原样透传）/ 不长出第二个系统。**判断标准：改动是让桥更透明，还是给桥一个自己的意见？后者即第二个 omp。** 写的时候刻意不加解释——原则写长了就成了新的可解释空间。"
   source: "原则落仓 2026-10-01"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-01T14:58:49
+  kind: decision
+  summary: "test:install 缩小为「发布包自包含」核验（17 项，不再起宿主）。根因实测确认：宿主解析插件目录不受 HOME 影响——往假 HOME 装一个只打印标记的扩展，标记未出现而真实 ~/.omp 那份桥起来了；XDG_DATA_HOME / OMP_PLUGIN_DIR / 改 cwd 三者都无效。新核验只测能观测的边界：manifest + npm pack 产物 + 从入口走相对 import 图（files[] 漏模块会「装得上、加载时才炸」，逐个断言文件名会被新增模块绕过，走图才抓得到），并已验过它会失败。docs 与 README（中英）如实写明 omp install <git-url> 端到端无自动化覆盖。**教训二则：(1) 探针声称隔离某样东西时用「该物缺席」的反证测——这里的反证是装一个只打印标记的扩展；(2) 绕不开宿主的机制时，缩小到能观测的边界并写明缺口，比自己重建一层隔离更诚实——后者正是不重复造轮子的反面。**"
+  source: "install 核验修正 2026-10-01"
   affects: [a2a-mcp-bridge]

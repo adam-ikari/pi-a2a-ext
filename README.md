@@ -59,6 +59,14 @@ instead of fetching — handy while developing. The `pi.extensions` field in
 tarball fails with `ENOTDIR`. A GitHub `owner/repo` shorthand is rejected as an
 invalid package name; use the full `https://….git` URL.
 
+All of the above was measured. **But the end-to-end path — `omp install <git-url>`
+on a clean machine, host startup, MCP handshake — has no automated check**: the
+host resolves its plugin directory independently of `HOME`, so the probe that
+simulated a fresh machine was really re-testing the stale install in the real
+`~/.omp`. `bun run test:install` now covers only whether the published package is
+self-contained (manifest, `files[]`, the entry's relative-import graph). See
+[docs/testing.md](docs/testing.md).
+
 If you would rather bypass the plugin manager, `./scripts/install.sh` symlinks
 straight into `~/.omp/agent/extensions/` and additionally verifies the link
 resolves and the modules the entry point imports are present. It takes
@@ -208,7 +216,7 @@ bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposur
 bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
 bun run test:approval  # approval-boundary discriminating check, ~2 minutes (needs a local omp; run manually)
-bun run test:install  # cross-machine install check, 26 items (isolated HOME + omp install <git-url>; run manually)
+bun run test:install  # published-package self-containment check, 17 items (npm pack + import graph; no host needed)
 ./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
 ```

@@ -59,6 +59,8 @@ omp plugin uninstall pi-a2a-ext
 `ENOTDIR`；GitHub 的 `owner/repo` 简写会被当作非法包名拒绝，要用完整的
 `https://….git` URL。
 
+上面这些是实测过的。**但 `omp install <git-url>` 的端到端（真机装 → 起宿主 → MCP 握手）目前没有自动化核验**——宿主解析插件目录不受 `HOME` 隔离影响，模拟新机器的探针一直在验真实环境里那份旧安装。`bun run test:install` 现在只核验发布包自身是否自包含（manifest、`files[]`、入口的相对 import 图）。见 [docs/testing.md](docs/testing.md)。
+
 若想绕开插件管理器，`./scripts/install.sh` 直接软链到 `~/.omp/agent/extensions/`，
 并额外校验软链可解析、且入口 import 的模块齐备。它支持 `--status`（只报告状态，
 坏了非零退出）与 `--uninstall`；要装到 `~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
@@ -206,7 +208,7 @@ bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门
 bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，手动跑）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
 bun run test:approval  # 审批边界判别核验，约 2 分钟（需本机 omp，手动跑）
-bun run test:install  # 跨机器安装核验，26 项（独立 HOME + omp install <git-url>，手动跑）
+bun run test:install  # 发布包自包含核验，17 项（npm pack + import 图，无需宿主）
 ./scripts/install.sh # 安装扩展到 ~/.omp/agent/extensions（--status / --uninstall）
 bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
 ```
