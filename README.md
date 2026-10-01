@@ -181,6 +181,12 @@ v1 boundaries:
 - Static Bearer token, no OAuth.
 - No concurrency or rate limiting.
 
+Design trade-off (read this before adding a feature):
+
+- The bridge sends the call and adds no meaning on the way. A capability the host's own `read`/`bash`/`edit` can express gets no new tool; paths are not judged here; the catalog is not filtered on permission grounds — **whatever permissions omp has are the permissions the bridge has**. Give the bridge one opinion of its own and it becomes a second omp.
+- A bridge-owned tool bypasses the host's approval gate, so it would need its own sandbox. **That is one decision with two halves, and they have to go together**: dropping only the sandbox leaves a hole nobody guards.
+
+
 ## Troubleshooting
 
 - **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2a rotate`.

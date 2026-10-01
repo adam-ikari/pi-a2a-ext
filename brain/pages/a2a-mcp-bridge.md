@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-01T13:56:07"
+updated: "2026-10-01T14:44:25"
 ---
 
 <!-- compiled_truth -->
@@ -406,4 +406,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "发现 test:install 的隔离根本不成立（harness 缺陷，与代码无关）：探针只设 HOME=临时目录，但实测用一个全新空目录做 HOME，桥仍起来且仍广播「file transfer」——说明 omp 加载的是**真实 HOME** ~/.omp/plugins/node_modules/pi-a2a-ext 下 9-30 装的那份旧拷贝（grep a2a_file_ 有 1 处命中），而不是探针刚装进临时 HOME 的那份。设 OMP_PLUGIN_DIR 无效。后果：极简化提交后该核验报 FAIL，实际验的是旧插件。**教训：探针声称隔离某样东西时，要用「该物缺席」的反证测，不能只看它指向的目录。** 修复未做（独立议题）。"
   source: "极简化轮 2026-10-01 复跑 install 核验"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-01T14:44:25
+  kind: decision
+  summary: "把本质需求与四条原则写进 AGENTS.md 与 README（中英），此前它们只存在于对话里。**本质需求：复用本机已经跑着的那个 omp**——任意 MCP 客户端把 mcp.json 指向端点即可调用它的工具，调用落在宿主 Main 会话的真实文件与 shell 上。桥只负责把调用送到，不在途中加意思。四条原则由这一句推出：不重复造轮子 / 不替 omp 实现沙盒 / 不按权限过滤（tools/list 原样透传）/ 不长出第二个系统。**判断标准：改动是让桥更透明，还是给桥一个自己的意见？后者即第二个 omp。** 写的时候刻意不加解释——原则写长了就成了新的可解释空间。"
+  source: "原则落仓 2026-10-01"
   affects: [a2a-mcp-bridge]
