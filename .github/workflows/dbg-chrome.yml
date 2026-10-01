@@ -1,0 +1,17 @@
+name: debug-chrome
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set -x
+          ls -ld /dev/shm || true
+          npx --yes playwright install --with-deps chromium 2>&1 | tail -3
+          CHROME=$(find "$HOME/.cache/ms-playwright" -type f -name chrome -perm -u+x | head -1)
+          echo "CHROME=$CHROME"
+          "$CHROME" --version || true
+          echo "--- dump-dom on data url ---"
+          "$CHROME" --headless --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --user-data-dir=/tmp/prof --dump-dom "data:text/html,<h1>HELLO</h1>" 2>&1 | tail -20
