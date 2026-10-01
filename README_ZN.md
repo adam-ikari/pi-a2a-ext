@@ -188,6 +188,8 @@ a2a_file_list { "path": "inbox" }                                       -> { "en
 - **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。**只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）；轮转恰逢中途时，配对的两条可能分处 `.1` 与当前文件。日志写失败不影响调用。参数里超过 120 字符的字符串（文件 base64 正文）只记 `<len:N,sha256:前8位>`，日志不落载荷；`a2a_file_put_chunk` 完全不记（否则一次上传就是几百行），由 start/end 两条记录夹住整个传输。
 - 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
+与 computer use（看屏幕猜坐标点按）的差别见 [docs/computer-use.md](docs/computer-use.md)。
+
 请求/响应格式、处理顺序、会话生命周期与错误码总表的完整 wire 契约见 [docs/protocol.md](docs/protocol.md)。
 
 在线文档站（GitHub Pages，push 自动发布）：<https://adam-ikari.github.io/pi-a2a-ext/>
@@ -220,14 +222,14 @@ bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check
 bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp + ~/.omp/agent/models.yml，手动跑）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp，手动跑）
-bun run test:approval  # 审批边界判别探针，约 2 分钟（需本机 omp，手动跑）
+bun run test:approval  # 审批边界判别核验，约 2 分钟（需本机 omp，手动跑）
 bun run test:files    # 真实宿主文件传输核验，71 项（需本机 omp，手动跑）
 bun run test:install  # 跨机器安装核验，26 项（独立 HOME + omp install <git-url>，手动跑）
 ./scripts/install.sh # 安装扩展到 ~/.omp/agent/extensions（--status / --uninstall）
 bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
 ```
 
-各测试的覆盖面、真实宿主探针的前置条件与判读标准（含审批探针 VERDICT A/B/C 语义）见 [docs/testing.md](docs/testing.md)。
+各测试的覆盖面、真实宿主核验的前置条件与判读标准（含审批核验 VERDICT A/B/C 语义）见 [docs/testing.md](docs/testing.md)。
 
 依赖说明：`@oh-my-pi/pi-coding-agent` 与 `@oh-my-pi/pi-ai` 以**精确版本**固定在 `devDependencies`，与宿主 omp 版本保持一致，仅用于类型检查与单测。**运行时不要从 `node_modules` 加载它们**——宿主 omp 的 `omp:legacy-pi-shim` 会把这些 import 重定向到宿主内嵌的同一份模块，`AgentRegistry.global()` 这类模块级单例才能共享；升级 omp 时同步改这两个版本号；`bun test` 内置**版本守卫**：实装 devDep ≠ pin 直接失败，`omp --version` ≠ pin 时告警。
 

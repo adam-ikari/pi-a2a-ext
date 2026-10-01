@@ -5,6 +5,7 @@
 		"sync": "node scripts/sync.mjs",
 		"start": "node scripts/sync.mjs && vitepress dev",
 		"build": "node scripts/sync.mjs && vitepress build && node scripts/sitemap.mjs",
+		"check": "node scripts/render-check.mjs",
 		"preview": "vitepress preview"
 	},
 	"dependencies": {

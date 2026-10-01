@@ -1,4 +1,4 @@
-# 测试与探针
+# 测试与核验
 
 ## 总览
 
@@ -7,15 +7,15 @@
 | `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 114 pass / 0 fail（7 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
-| `bun run test:approval` | 审批边界判别探针，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
+| `bun run test:approval` | 审批边界判别核验，约 2 分钟 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:files` | 真实宿主文件传输核验，71 项 | 是 | `FILES OK` |
 | `bun run test:install` | 跨机器安装核验，26 项 | 是 | `INSTALL OK` |
 
-统一前置（E2E 五件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。前四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（探针失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（E2E 五件套）：PATH 上有 `omp`（或设 `OMP_BIN`）；真实 `~/.omp/agent/models.yml` 存在（拷进临时 HOME，仅此一项与真实 HOME 共享）。前四者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（核验失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 ## `test:install` — 跨机器安装核验（26 项）
 
-**唯一验证「任意机器可装」的探针**。`test:files` 自己把扩展软链进沙箱 agentDir，证明桥可用，但完全不碰安装链路；本探针走 `omp install <git-url>` 的真实路径。
+**唯一验证「任意机器可装」的核验**。`test:files` 自己把扩展软链进沙箱 agentDir，证明桥可用，但完全不碰安装链路；本核验走 `omp install <git-url>` 的真实路径。
 
 用独立 `HOME` 模拟另一台机器（除 `models.yml` 外一无所有），分组：
 
@@ -31,7 +31,7 @@
 
 默认装 `https://github.com/adam-ikari/pi-a2a-ext.git`，可用 `A2A_INSTALL_SPEC` 换成本地路径或 `.` 以测开发态。全过 → `INSTALL OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
-**写这个探针时踩的两个坑（均为 harness 自身缺陷，非产品缺陷，但会让探针给出假阴性）**：
+**写这些核验脚本时踩的两个坑（均为 harness 自身缺陷，非产品缺陷，但会让核验给出假阴性）**：
 
 - `omp --mode rpc --print "<prompt>"` 跑完一轮即退出，**桥随之消失**，远程调用得到 `ConnectionRefused`。须用 `omp --mode rpc` 不传 prompt、stdin 保持打开。
 - 以 `proc.exitCode === null` 作轮询条件，会在最后一个 stdout 分片送达前提前退出，把「桥正常」误报为「桥没起来」。**最终改为直接 HTTP 探测**（真实客户端的做法），不再刮 stdout——`test:files` 一直是这么做的，所以没踩到。
@@ -75,12 +75,12 @@
 | JSON-RPC 校验 | 4 | GET 405；坏 JSON 400；`jsonrpc: "1.0"` 400；batch 400 |
 | 暴露门 | 4 | 目录含 `read`；被 deny 的 `bash` 不在列表；`bash` 调用 → `isError` + `not exposed`；别名 `xd://read` 同样拒绝 |
 | 真实执行 | 1 | `tools/call read` 在 Main 会话读回文件内容 |
-| 审计 | 5 | `read` 的 start/done 双相；被 deny 的 `bash` 探针也有 start；所有 done 能按 id 配对到 start；**记录携带 `sid`（归因）**；审计文件 0600 |
+| 审计 | 5 | `read` 的 start/done 双相；被 deny 的 `bash` 调用也有 start；所有 done 能按 id 配对到 start；**记录携带 `sid`（归因）**；审计文件 0600 |
 | 会话终止 | 2 | 已鉴权 DELETE → 204；随后请求该会话 → 404 |
 
 全过 → `HARDEN OK`；任何一项不过 → `FAIL: <label>` + exit 1（并打印宿主日志尾部）。
 
-## `test:approval` — 审批边界判别探针
+## `test:approval` — 审批边界判别核验
 
 **要回答的问题**：宿主无交互 UI（rpc 模式）时，`prompt` 档的 `tools/call`（bash）到底是什么行为？
 
@@ -123,6 +123,6 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 ## 约定
 
-- `test/*.test.ts` 被 `bun test` 自动发现；探针脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts` / `file-transfer.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
+- `test/*.test.ts` 被 `bun test` 自动发现；核验脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts` / `file-transfer.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
 - 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计路径沙箱）。
-- 判定性结论（如审批挂起语义）必须由探针复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。
+- 判定性结论（如审批挂起语义）必须由核验复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。

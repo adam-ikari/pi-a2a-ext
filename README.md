@@ -191,6 +191,8 @@ a2a_file_list { "path": "inbox" }                                       -> { "en
 - **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI); if rotation lands mid-call, the paired records can end up split across `.1` and the current file. Audit write failures never affect the call. Strings longer than 120 characters in the args (file base64 bodies) are recorded as `<len:N,sha256:first 8>` so the log never holds payloads; `a2a_file_put_chunk` is not recorded at all (one upload would otherwise be hundreds of lines), with the start/end records bracketing the whole transfer.
 - If the configured port is busy, the bridge falls back to an ephemeral port and warns (update the port in the remote `mcp.json`).
 
+How this differs from computer use (guessing pixel coordinates on a screenshot) is in [docs/computer-use.md](docs/computer-use.md).
+
 The full wire contract — request/response shapes, processing order, session lifecycle and the error-code table — is in [docs/protocol.md](docs/protocol.md).
 
 Online docs (GitHub Pages, published on push): <https://adam-ikari.github.io/pi-a2a-ext/>
@@ -223,14 +225,14 @@ bun run lint          # lint + format check (Biome; fix with bunx biome check --
 bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
-bun run test:approval  # approval-boundary discriminating probe, ~2 minutes (needs a local omp; run manually)
+bun run test:approval  # approval-boundary discriminating check, ~2 minutes (needs a local omp; run manually)
 bun run test:files    # real-host file-transfer checks, 71 items (needs a local omp; run manually)
 bun run test:install  # cross-machine install check, 26 items (isolated HOME + omp install <git-url>; run manually)
 ./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
 ```
 
-What each test covers, the preconditions for the real-host probes, and how to read their verdicts (including the approval probe's VERDICT A/B/C semantics) are in [docs/testing.md](docs/testing.md).
+What each test covers, the preconditions for the real-host checks, and how to read their verdicts (including the approval check's VERDICT A/B/C semantics) are in [docs/testing.md](docs/testing.md).
 
 Dependency note: `@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-ai` are pinned to **exact versions** in `devDependencies`, kept in step with the host omp version, and used only for type checking and unit tests. **Do not load them from `node_modules` at runtime** — the host omp's `omp:legacy-pi-shim` redirects those imports to the same modules bundled inside the host, which is what lets module-level singletons like `AgentRegistry.global()` be shared; update both version numbers when upgrading omp. `bun test` includes a **version guard**: an installed devDep that differs from the pin fails outright, and an `omp --version` that differs from the pin only warns.
 

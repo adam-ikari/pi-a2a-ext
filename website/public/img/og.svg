@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="Noto Sans CJK SC, Noto Sans CJK, sans-serif">
+  <title>omp A2A Bridge — 让任意 agent 调用本机这个 omp 的工具</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b2b3a"/>
+      <stop offset="1" stop-color="#123a4d"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0v48" fill="none" stroke="#38bdf8" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- mark, same geometry as public/img/logo.svg -->
+  <g transform="translate(88 150) scale(3.2)">
+    <rect x="1.5" y="1.5" width="45" height="45" rx="10" fill="#0b2b3a" stroke="#38bdf8" stroke-width="2.5"/>
+    <circle cx="15" cy="24" r="5.5" fill="#38bdf8"/>
+    <circle cx="33" cy="24" r="5.5" fill="#a78bfa"/>
+    <path d="M20.5 24h7" stroke="#e0f2fe" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M25.5 20.5 29 24l-3.5 3.5" stroke="#e0f2fe" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="280" y="228" fill="#f0f9ff" font-size="62" font-weight="700" letter-spacing="-1">omp A2A Bridge</text>
+  <text x="280" y="284" fill="#7dd3fc" font-size="34" font-weight="500">把本机这个 omp 变成一个 MCP 服务器</text>
+
+  <rect x="88" y="360" width="1024" height="1" fill="#38bdf8" fill-opacity="0.25"/>
+
+  <text x="88" y="432" fill="#e0f2fe" font-size="30">任意 MCP 客户端配上 url 和 token，即可调用它的工具——</text>
+  <text x="88" y="480" fill="#e0f2fe" font-size="30">执行落在真实的文件与 shell 上，宿主不做模型推理。</text>
+
+  <text x="88" y="556" fill="#38bdf8" font-size="24" font-weight="500" font-family="Noto Sans Mono CJK SC, monospace">adam-ikari.github.io/pi-a2a-ext</text>
+</svg>
