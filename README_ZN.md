@@ -62,15 +62,16 @@ omp plugin uninstall pi-a2a-ext
 上面这些是实测过的。**但 `omp install <git-url>` 的端到端（真机装 → 起宿主 → MCP 握手）目前没有自动化核验**——宿主解析插件目录不受 `HOME` 隔离影响，模拟新机器的探针一直在验真实环境里那份旧安装。`bun run test:install` 现在只核验发布包自身是否自包含（manifest、`files[]`、入口的相对 import 图）。见 [docs/testing.md](docs/testing.md)。
 
 若想绕开插件管理器，`./scripts/install.sh` 直接软链到 `~/.omp/agent/extensions/`，
-并额外校验软链可解析、且入口 import 的模块齐备。它支持 `--status`（只报告状态，
-坏了非零退出）与 `--uninstall`；要装到 `~/.omp/agent` 以外的位置，设 `OMP_AGENT_DIR`。
+并额外校验软链可解析、以及从入口出发**逐层传递**的相对 import 都能解析到文件。它支持
+`--status`（只报告状态，坏了非零退出）与 `--uninstall`；要装到 `~/.omp/agent`
+以外的位置，设 `OMP_AGENT_DIR`。
 
 > 这些方式都**不要**用 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 代替。那条命令
 > 只在 `$PWD` 恰好是仓库根目录时有效；换个目录执行就会链到一个不存在的路径，桥静默
 > 地不启动。
 
-首次启动时桥会在 `~/.omp/agent/` 下自行生成配置、token 与文件沙箱，所以每台机器
-无需额外配置。
+首次启动时桥会在 `~/.omp/agent/` 下自行生成配置与 token，所以每台机器无需额外
+配置。
 
 启动宿主 omp 后，通知栏显示：
 
@@ -106,7 +107,7 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 宿主会话内：
 
-- `/a2a` — 显示当前监听地址、端口、token 前缀、文件沙箱根与大小上限（沙箱不可用时显示 `files disabled`）
+- `/a2a` — 显示当前监听地址、端口与 token 前缀
 - `/a2a rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
 - `/a2a token` — 打印完整 token（状态行只显示前缀）
 

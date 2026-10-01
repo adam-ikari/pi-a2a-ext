@@ -34,7 +34,7 @@
  *                     names what was actually checked (default: origin git URL)
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -146,6 +146,70 @@ while (queue.length > 0) {
 }
 check(missing.length === 0, "every relative import of the entry resolves inside the package", missing.join(", "));
 check(seen.size >= 6, "the entry graph was actually walked", `${seen.size} modules`);
+
+// --- 4. scripts/install.sh, run for real against a throwaway agent dir -------
+
+// This script used to carry a hand-written list of src/*.ts that it required to
+// exist. Deleting two modules left that list stale, and every real install then
+// died with "incomplete checkout?" on a complete checkout. So exercise the
+// script rather than reading it: a clean install must succeed, and moving one
+// module out of the graph must make it fail. A check that cannot fail is not a
+// check.
+const shHome = mkdtempSync(join(tmpdir(), "install-sh-"));
+const shAgent = join(shHome, "agent");
+mkdirSync(shAgent, { recursive: true });
+const sh = (args: string[]) =>
+	execFileSync("bash", [join(REPO, "scripts", "install.sh"), ...args], {
+		env: { ...process.env, OMP_AGENT_DIR: shAgent },
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+try {
+	sh([]);
+	const link = join(shAgent, "extensions", "a2a-bridge.ts");
+	check(
+		existsSync(link) && realpathSync(link) === realpathSync(join(REPO, "extensions", "a2a-bridge.ts")),
+		"install.sh links the entry into a fresh agent dir",
+		link,
+	);
+	const status = sh(["--status"]);
+	// --status prints "repo:" then "status: <state>", so match the state field
+	// rather than anchoring on a line start.
+	check(/^status:\s+installed\b/m.test(status), "install.sh --status reports installed", status.trim());
+} catch (e) {
+	check(false, "install.sh succeeds on a complete checkout", String((e as { stderr?: string }).stderr ?? e).trim());
+}
+
+// The negative half: pick a module the entry reaches but does not import
+// directly, so this proves the script walks transitively rather than only
+// checking the entry's own import list.
+const transitive = readFileSync(join(REPO, "src", "bridge.ts"), "utf8").match(/from\s+"(\.\/[^"]+)"/);
+check(!!transitive, "found a module src/bridge.ts imports to use as the negative case", transitive?.[1] ?? "none");
+if (transitive) {
+	const victim = join(REPO, "src", transitive[1].replace(/^\.\//, ""));
+	const stashed = `${victim}.stashed-by-probe`;
+	renameSync(victim, stashed);
+	let refused = "";
+	try {
+		sh([]);
+		refused = "install.sh exited 0 with a module missing from the graph";
+	} catch (e) {
+		const err = String((e as { stderr?: string }).stderr ?? "");
+		refused = /unresolvable relative import/.test(err)
+			? ""
+			: `failed, but not with the expected message: ${err.trim()}`;
+	} finally {
+		renameSync(stashed, victim);
+	}
+	check(refused === "", "install.sh refuses when a transitively-imported module is missing", refused);
+	// The stash must be gone either way, or a failed check leaves the tree broken.
+	if (existsSync(stashed)) renameSync(stashed, victim);
+}
+
+sh(["--uninstall"]);
+check(!existsSync(join(shAgent, "extensions", "a2a-bridge.ts")), "install.sh --uninstall removes the link", shAgent);
+rmSync(shHome, { recursive: true, force: true });
 
 rmSync(stage, { recursive: true, force: true });
 

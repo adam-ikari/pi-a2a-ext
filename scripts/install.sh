@@ -91,9 +91,60 @@ resolved="$(readlink -f "$LINK")"
 [ "$resolved" = "$(readlink -f "$ENTRY")" ] ||
 	die "install failed: $LINK resolves to '$resolved', expected '$ENTRY'"
 
-for dep in src/server.ts src/bridge.ts src/filetools.ts src/fileguard.ts src/config.ts src/audit.ts src/auth.ts; do
-	[ -f "$REPO_ROOT/$dep" ] || die "install failed: $REPO_ROOT/$dep is missing (incomplete checkout?)"
+# Walk the entry's own relative-import graph instead of keeping a hand-written
+# file list here. A hand-written list is a second source of truth about the
+# module graph, and it went stale the moment a module was deleted: it still
+# demanded src/filetools.ts and src/fileguard.ts, so a real install died with
+# "incomplete checkout?" on a perfectly complete checkout. The graph is what
+# test/install-probe.ts already walks for the published tarball; same question,
+# same answer.
+missing=""
+queue="$ENTRY"
+seen=""
+while [ -n "$queue" ]; do
+	cur="${queue%% *}"
+	queue="${queue#"$cur"}"
+	queue="${queue# }"
+	case " $seen " in *" $cur "*) continue ;; esac
+	seen="$seen $cur"
+	dir="$(dirname "$cur")"
+	for spec in $(grep -oE "from \"[./][^\"]*\"" "$cur" 2>/dev/null | sed 's/from "//; s/"$//'); do
+		# A bare specifier (no leading . or /) is a package, not a file in this
+		# checkout. The bridge is zero-dependency, so today there are none — but
+		# if one appears it is node_modules' business, not "incomplete checkout".
+		case "$spec" in
+		./* | ../*) ;;
+		*) continue ;;
+		esac
+		# realpath -m normalises any number of leading "../" without this
+		# script reimplementing path reduction. The file itself may not exist
+		# yet — that is the case being reported.
+		# Specs already carry the extension: this project imports "../src/x.ts"
+		# because the host loads TypeScript directly. So try the spec verbatim
+		# first, and only then the extensionless and directory forms.
+		next="$(realpath -m "$dir/$spec")"
+		if [ -f "$next" ]; then
+			:
+		elif [ -f "$next.ts" ]; then
+			next="$next.ts"
+		elif [ -f "$next/index.ts" ]; then
+			next="$next/index.ts"
+		else
+			case " $seen " in *" $next "*) continue ;; esac
+			[ -z "$missing" ] || missing="$missing, "
+			missing="$missing$next (imported by ${cur#"$REPO_ROOT"/})"
+			continue
+		fi
+		queue="$queue $next"
+	done
 done
+[ -z "$missing" ] || die "install failed: unresolvable relative import: $missing"
+[ -n "$seen" ] || die "install failed: walked no modules from $ENTRY"
+
+printf 'installed: %s\n' "$LINK"
+printf '  -> %s\n' "$resolved"
+printf '  graph: %s modules reachable from the entry\n' "$(set -- $seen; echo $#)"
+info "restart omp to pick it up; the notification bar will show the listen URL and token."
 
 printf 'installed: %s\n' "$LINK"
 printf '  -> %s\n' "$resolved"

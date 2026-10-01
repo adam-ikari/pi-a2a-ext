@@ -68,8 +68,9 @@ self-contained (manifest, `files[]`, the entry's relative-import graph). See
 [docs/testing.md](docs/testing.md).
 
 If you would rather bypass the plugin manager, `./scripts/install.sh` symlinks
-straight into `~/.omp/agent/extensions/` and additionally verifies the link
-resolves and the modules the entry point imports are present. It takes
+straight into `~/.omp/agent/extensions/` and additionally verifies that the link
+resolves and that every relative import reachable from the entry — transitively,
+not just the ones on its first line — resolves to a file. It takes
 `--status` (report state, non-zero if broken) and `--uninstall`; set
 `OMP_AGENT_DIR` to target somewhere other than `~/.omp/agent`.
 
@@ -78,8 +79,8 @@ resolves and the modules the entry point imports are present. It takes
 > `$PWD` happens to be the repo root; run it from anywhere else and it silently
 > links a path that does not exist, and the bridge simply never comes up.
 
-On first start the bridge generates its own config, token and file sandbox
-under `~/.omp/agent/`, so there is nothing else to set up per machine.
+On first start the bridge generates its own config and token under
+`~/.omp/agent/`, so there is nothing else to set up per machine.
 
 After starting the host omp, the notification bar shows:
 
@@ -114,7 +115,7 @@ Config edits take effect on the **next host restart**; to change only the token 
 
 Inside a host session:
 
-- `/a2a` — show the current listen address, port, token prefix, file sandbox root and size cap (`files disabled` when the sandbox is unavailable)
+- `/a2a` — show the current listen address, port and token prefix
 - `/a2a rotate` — rotate the token (update the remote `mcp.json` afterwards)
 - `/a2a token` — print the full token (the status line only shows a prefix)
 

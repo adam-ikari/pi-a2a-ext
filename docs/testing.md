@@ -9,13 +9,13 @@
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，28 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:install` | 发布包自包含核验，17 项 | 否 | `PACKAGE OK` |
+| `bun run test:install` | 发布包自包含核验 + `install.sh` 实装核验，22 项 | 否 | `PACKAGE OK` |
 
 统一前置（E2E 三件套）：PATH 上有 `omp`（或设 `OMP_BIN`）。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。三者都在**隔离临时 HOME** 里启动宿主：软链本仓库扩展、独立配置与审计路径、跑完即删（核验失败时保留现场目录并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 三个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
-## `test:install` — 发布包自包含核验（17 项）
+## `test:install` — 发布包自包含核验 + `install.sh` 实装核验（22 项）
 
 **核验发布的 tarball 装得上去、且装完就能加载。** 三组：
 
@@ -30,6 +30,10 @@
 **这一版不启动宿主、不碰 MCP 端点。** 上一版两样都做，但**验的是错的对象**：宿主解析插件目录不受 `HOME` 影响，临时 HOME 并未隔离插件发现——宿主继续加载真实 `~/.omp/plugins` 里那份，于是每一条「新机器」断言其实都在重测那份陈旧副本。`XDG_DATA_HOME`、`OMP_PLUGIN_DIR`、改 `cwd` 都试过，没有一个能改变插件发现。实测证据：往假 HOME 装一个只会打印标记的扩展，标记没出现，真实那份的桥却起来了。
 
 因此 **`omp install <git-url>` 的端到端（真机装 → 起宿主 → MCP 握手 → 文件往返）目前没有自动化覆盖**。恢复它要先搞清楚宿主的插件发现机制，那是独立任务；在这个核验里自己搭一层目录隔离，等于对别人的目录布局另立一套权威。
+
+第四组跑 `scripts/install.sh` 本身：在一个临时 `OMP_AGENT_DIR` 上实装、查状态、卸载，并**反证**——把 `src/bridge.ts` 传递引入的模块（`audit.ts`）移走，脚本必须以 `unresolvable relative import` 拒绝安装。反证用的是传递依赖而非入口直连项，否则只证明了脚本读了入口的 import 列表。
+
+这一组是补上的漏洞：`install.sh` 原先手写一份 `src/*.ts` 清单并要求它们存在，删掉 `filetools.ts`/`fileguard.ts` 后那份清单没跟着删，于是**每次实装都在完整 checkout 上报 `incomplete checkout?` 失败**。手写清单是模块图的第二份真相，删模块时它必然过期。现在脚本自己走 import 图，与本核验第三组同一个问题、同一个答案。
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
@@ -72,5 +76,5 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 ## 约定
 
 - `test/*.test.ts` 被 `bun test` 自动发现；核验脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
-- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计路径沙箱）。
+- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计日志路径，默认 `<agentDir>/a2a-bridge.log`）。
 - 判定性结论（如审批挂起语义）必须由核验复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。
