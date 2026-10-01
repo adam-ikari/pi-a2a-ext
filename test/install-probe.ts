@@ -101,7 +101,7 @@ await Bun.sleep(300);
 const announced = announce.exec(buf);
 check(!!announced, "host announced the bridge", announced?.[1] ?? `${buf.slice(0, 200)} ${errBuf.slice(0, 200)}`);
 if (!announced) fail("bridge never came up on the fresh machine");
-check(/A2A file transfer enabled/.test(buf), "host announced file transfer");
+check(!/A2A file transfer enabled/.test(buf), "host does not announce file transfer (no bridge-owned tools)");
 
 const base = announced[1];
 const cfgPath = join(FAKE_HOME, ".omp", "agent", "a2a-bridge.json");
@@ -156,44 +156,24 @@ check(base.includes(`:${cfg.port ?? 0}/`) || cfg.port === 0, "announced URL is t
 
 const listBody = (await rpc("tools/list", {})).body as { result?: { tools?: Array<{ name: string }> } };
 const names = (listBody.result?.tools ?? []).map((t) => t.name);
-check(names.filter((n) => n.startsWith("a2a_file_")).length === 6, "tools/list exposes the 6 bridge file tools");
+check(
+	names.filter((n) => n.startsWith("a2a_file_")).length === 0,
+	"tools/list exposes no bridge-owned tools",
+	names.filter((n) => n.startsWith("a2a_file_")).join(","),
+);
 check(
 	names.some((n) => n === "read" || n === "bash"),
 	"tools/list exposes host tools",
 	`${names.length} total`,
 );
+// Every advertised name must be callable — the catalog is the host registry,
+// so a remote client can drive anything the host itself would.
+const called = await call("read", { path: "/etc/hostname" });
+check(called !== null, "a host tool executes over MCP from another machine", JSON.stringify(called).slice(0, 80));
+const unknown = await callText("definitely_not_a_tool", {});
+check(unknown.includes("not exposed"), "unregistered names are refused", unknown.slice(0, 60));
 
-console.log("\n--- file round-trip through the sandbox ---");
-const put = await call("a2a_file_put", {
-	path: "inbox/note.md",
-	file: { mimeType: "text/markdown", bytes: Buffer.from("hello from another machine").toString("base64") },
-});
-check(put.ok === true, "a2a_file_put succeeds", JSON.stringify(put).slice(0, 80));
-const got = await call("a2a_file_get", { path: "inbox/note.md" });
-check(
-	Buffer.from(String(got.bytes), "base64").toString() === "hello from another machine",
-	"a2a_file_get returns the same bytes",
-);
-const ls = await call("a2a_file_list", { path: "inbox" });
-check(
-	(ls.entries as Array<{ path: string }>).some((e) => e.path === "inbox/note.md"),
-	"a2a_file_list shows the file",
-);
-
-console.log("\n--- sandbox boundaries hold on this machine too ---");
-check(/invalid_path/.test(await callText("a2a_file_get", { path: ".tmp/x.part" })), "staging dir is not addressable");
-await call("a2a_file_put", { path: "plain", file: { bytes: Buffer.from("x").toString("base64") } });
-const notdir = await callText("a2a_file_get", { path: "plain/child" });
-check(/^a2a_file_error [a-z_]+: /.test(notdir), "host fs errors carry a code", notdir.slice(0, 60));
-check(!notdir.includes(FAKE_HOME) && !/ENOTDIR/.test(notdir), "...and leak no host path");
-const cid = String((await call("a2a_file_put_start", { path: "race.bin" })).transferId);
 const chunk = Buffer.alloc(64, 0xcd).toString("base64");
-await Promise.all([
-	call("a2a_file_put_chunk", { transferId: cid, seq: 0, bytes: chunk }),
-	call("a2a_file_put_chunk", { transferId: cid, seq: 0, bytes: chunk }),
-]);
-const cend = await call("a2a_file_put_end", { transferId: cid });
-check(cend.bytes === 64, "concurrent same-seq writes exactly one chunk", JSON.stringify(cend).slice(0, 70));
 
 console.log("\n--- auth still gates everything ---");
 const noAuth = await fetch(base, {

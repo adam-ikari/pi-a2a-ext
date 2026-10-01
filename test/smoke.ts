@@ -41,7 +41,7 @@ probe.stop(true);
 
 // Pre-seed the config so loadConfig reads our token/port rather than
 // generating a default (port 0) config.
-const cfg = { port: PORT, token: TOKEN, host: "127.0.0.1", deny: [], denyMCPTools: false };
+const cfg = { port: PORT, token: TOKEN, host: "127.0.0.1" };
 writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
 
 // omp refuses to boot without any model auth. Copy the developer's real

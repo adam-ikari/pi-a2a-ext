@@ -5,16 +5,10 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-01T11:56:34"
+updated: "2026-10-01T13:49:26"
 ---
 
 <!-- compiled_truth -->
-# A2A MCP Bridge — Key Decisions
-
-Goal: an omp extension (pi-a2a-ext) turns the running omp into a Streamable HTTP MCP server so a remote omp can call the host's live tools without the host invoking any LLM API.
-
-（本页其余 Q1–Q8 与 timeline 未改动；本轮为网站侧修订，见下方「网站构建链」一节。）
-
 ## 网站构建链（2026-10-01 修订）
 
 站点是 VitePress 1.6.4 单语言中文站，GitHub Pages 部署，构建链为 `website/scripts/sync.mjs`（从 `README_ZN.md` / `CHANGELOG.md` / `docs/**` 生成 `content/`）→ `vitepress build` → `scripts/sitemap.mjs`。
@@ -32,12 +26,122 @@ Goal: an omp extension (pi-a2a-ext) turns the running omp into a Streamable HTTP
 **写这个探针时踩的三个 harness 假阴性——都不是站点缺陷，但症状与真缺陷无法区分**：(1) `cleanUrls` 下 VitePress 写的是 `protocol.html` 而服务路径是 `/protocol`，静态服务器不做 `.html` 兜底就 404；(2) Pages 的 base 前缀（`/pi-a2a-ext/`）必须从 index.html 里读出来并剥掉，否则 entry JS 404、页面不 hydrate，**症状与「Mermaid 组件坏了」完全一样**；(3) `parse error` 正则命中的是 `protocol.md` 正文里作为 JSON-RPC 错误码讲解的 `parse error`，须只扫 SVG 段。**教训与既有方法论一致：探针自己会骗人，必须先证明它在故障时 FAIL**（本轮已验：组件提前 return → 两页 FAIL；og 改回 SVG / JSON-LD 改回属性写法 → 对应两项 FAIL）。
 
 **`vitepress-plugin-mermaid` 的 `Mermaid.vue` 直接在 `onMounted` 里 `await import("mermaid")`**——它本身就是懒的，问题全在 entry 那一侧的静态注册。
+## Q1 Execution target (decided)
+Remote tools/call executes IN the host's live session via AgentRegistry.global().get("Main").session.getToolByName(name).execute(...). No headless subprocess for v1.
 
-## 既有结论（未改动）
+## Q2 Transport (decided — supersedes early "stdio" note)
+Streamable HTTP on 127.0.0.1 via Bun.serve, single process inside the host omp. stdio was rejected: a stdio MCP server needs exclusive stdin/stdout which collides with the running TUI, and TUI approval forwarding requires same-process. Verified against host client: protocol 2025-11-25, Accept: application/json, text/event-stream; plain JSON responses suffice; GET SSE optional (405 tolerated); notifications accept 200/202 (src/mcp/transports/http.ts).
 
-Q1 执行目标在宿主 Main 会话内；Q2 传输为 Streamable HTTP on 127.0.0.1 via Bun.serve，协议 2025-11-25；Q3 审批复用宿主门，无 UI + prompt 档会挂起（≥90s）而非返回 isError；Q4 暴露面为 `pi.getAllTools()` 减 deny，tools/call 与目录取交集；Q5 静态 Bearer token，首启生成、0600 持久化、轮换用 `/a2a rotate`；Q6 配置 fail-closed（仅 token 自愈）、两阶段 JSONL 审计带 `Mcp-Session-Id`；Q7 强制会话、64 上限、24h 空闲 TTL、端口占用回退；Q8 文件面沙箱与分块幂等，串行步骤内 `requireLive(tr)` 重验活性。README 语言分工：`README.md` 英文、`README_ZN.md` 中文，站点渲染中文。跨机器安装 `omp install <git-url>`，本地开发 `omp install .`。
+## Q3 Approval (decided; protocol behavior reversed 2026-09-24)
+Reuse the host's built-in approval gate. Registry tools ARE ExtensionToolWrapper instances (sdk.ts:2922) which run resolveApproval internally: yolo passes, deny throws -> isError, per-tool prompt raises ui.select. The bridge must inject the REAL session.settings and the ExtensionContext ui into the AgentToolContext it builds; it implements no approval logic itself.
+REVERSED (approval probes on omp 18.2.10, --mode rpc): prompt tier with NO interactive UI does NOT return isError — the tools/call request hangs indefinitely (>=90s observed; src/ contains no setTimeout/AbortSignal/timeout anywhere). Execution is still blocked (side-effect probe never fired), so fail-closed holds only in the security sense, not the protocol sense: the README section 「审批 / Approval」 (was line 105; corrected 2026-09-24 to document the hang, the caller-timeout requirement, and the start-without-done audit trace; the discriminating probe is committed as test/approval-probe.ts (expected verdict B). Host mechanism: hasUI=false in plain rpc (host sets hasUI=f||r==="rpc-ui"), so ui.select has no answerer; the host's 600000ms input timeout belongs to login, not approval. The TUI prompt path is unaffected.
 
+## Q4 Exposure ~~(decided; tightened 2026-09-23)~~ — **SUPERSEDED 2026-10-01**
 
+> **已作废。** `deny` / `denyMCPTools` 全部删除，`tools/list` 改为 `pi.getAllTools()` 原样透传不过滤。理由见文末「极简化」一节。以下保留为历史记录。
+pi.getAllTools() -> full tool list (name/description/parameters via toolWireSchema -> JSON Schema 2020-12), config deny list removes tools from both tools/list and tools/call. No whitelist in v1.
+Exposure semantics (2026-09-23 review): the catalog is the session tool REGISTRY as-is — getAllToolInfos() filters neither `hidden` tools nor tools the host currently disabled for its own model, so it is deliberately NOT a mirror of what the host model can see. tools/call intersects with the catalog (name survives deny AND appears in pi.getAllTools()), so aliases like xd://bash and guessed hidden names are rejected; denied and not-in-catalog share one message so a token holder cannot probe name existence.
+
+## Q5 Auth (decided)
+Static Bearer token, 32 random bytes base64url, generated on first start, persisted 0600 in ~/.omp/agent/a2a-bridge.json together with port/host/deny. Constant-time compare. /a2a rotate regenerates. No OAuth/TLS in v1 (loopback default; SSH forwarding documented).
+
+## Q6 Config & audit (decided 2026-09-23; audit redesigned two-phase 2026-09-24)
+Config validation is fail-closed: a present-but-malformed field (port/deny/host/denyMCPTools) aborts extension startup with a named error instead of running with a wrong exposure surface. Only `token` self-heals — regenerated AND persisted, so it stays stable across restarts. Config writes are 0600 at creation (writeFile mode), closing the pre-chmod window. External edits to a2a-bridge.json apply on next host restart; only `/a2a rotate` is live.
+Every remote tools/call writes TWO JSONL audit records paired by id — auditStart at dispatch ({ts,id,sid,phase:"start",tool,args truncated to 1KB}) and auditDone on completion ({ts,id,sid,phase:"done",tool,isError,args}) — to <agentDir>/a2a-bridge.log: 0600, rotates to .1 past 512KB, $A2A_BRIDGE_AUDIT overrides the path, audit failures never affect the call. Design reversal 2026-09-24 (supersedes the completion-only amendment): a call that never settles (prompt tier in no-UI mode) leaves start-without-done, so hangs are visible in the log. sid (the Mcp-Session-Id) was added to both records 2026-09-24, closing the attribution gap: under one shared token a call is attributable to its client session (asserted in unit tests and the hardening probe).
+
+## Q7 Session & protocol (decided 2026-09-23)
+Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — missing returns 400, unknown or idle past 24h returns 404, and every hit refreshes the idle TTL (header omission is not a bypass). The map is bounded at 64 sessions with least-recently-seen eviction, because abandoned clients never return to be purged. Auth runs before every state-touching branch, so an unauthenticated DELETE cannot terminate sessions. initialize always answers protocolVersion 2025-11-25 instead of echoing whatever the client asked for, and jsonrpc must be exactly "2.0" (else 400). A configured port already in use falls back to an ephemeral port WITH a warning, since remote mcp.json pins the old port.
+
+## Notable verified facts
+- MCP SDK not installed anywhere: bridge hand-writes JSON-RPC on Bun.serve, zero deps.
+- AgentToolContext required fields (sessionManager/modelRegistry/model/isIdle/hasQueuedMessages/abort) are all reachable from public surfaces: AgentSession.settings/.sessionManager/.modelRegistry/.model + ExtensionContext ui/hasUI/isIdle/hasPendingMessages/abort.
+- Main is registered into AgentRegistry.global() by createAgentSession in ALL modes (sdk.ts:1745,3321), so tools/call works in TUI and headless alike (headless prompt tier fails closed when policy requires UI — see Q3 reversal for exact protocol behavior).
+- Host MCP client pages tools/list with do-while on nextCursor (mcp/client.ts:233); omitting nextCursor is valid.
+- @oh-my-pi/* specifiers in extensions are rewritten at runtime by omp's `omp:legacy-pi-shim` Bun onResolve plugin (regex ^@(oh-my-pi|mariozechner|earendil-works)/(pi-agent-core|pi-ai|pi-coding-agent|pi-natives|pi-tui|pi-utils)(/.*)?$) to the host's bundled modules. AgentRegistry.global() is a MODULE-level static, so a second copy loaded from node_modules would fork the registry and tools/call would see no Main session — hence those packages belong in devDependencies only, pinned to the host omp version, never relied on at runtime.
+- omp's Streamable HTTP client throws Transport not connected from notify() unless a session id exists, and attaches Mcp-Session-Id to every post-initialize request: strict session enforcement cannot break omp's own client.
+- Approval probes (2026-09-24, omp 18.2.10, --mode rpc, default settings): default approvalMode yolo -> remote bash EXECUTED in 0.03s (README 「审批 / Approval」 yolo bullet confirmed). With --approval-mode=always-ask: read auto-approved (17-30ms), bash hung >=90s, side-effect file never appeared, server answered ping 200 afterwards. Probe committed as test/approval-probe.ts (exit 1 on fail-open/unexpected return/audit-invisible); hardening probe committed as test/hardening.ts (29 checks incl. two-phase pairing and sid-attribution assertions).
+- Version state 2026-09-24 (corrected): host omp is 18.2.10 (omp --version + global pi-coding-agent/pi-ai all agree); devDep pin + bun.lock + node_modules are 18.2.10 — the "pin == host" invariant HOLDS. The earlier "host 18.2.11" claim was wrong: 18.2.11 is the registry latest, not the installed version. The real anomaly was repo node_modules at 18.2.11, desynced from its own lock, healed via bun install (tsc + tests green under both versions). Guard added: test/versions.test.ts hard-asserts exact pins and installed==pin, warns when omp --version != pin.
+- Typing the execute() context against the host SDK depends on pi-coding-agent's AgentToolContext augmentation being loaded: the `import type {} from "@oh-my-pi/pi-coding-agent/tools/context"` in src/bridge.ts merges the CustomToolContext required fields (sessionManager/modelRegistry/model/isIdle/hasQueuedMessages/abort) plus ui/hasUI into the interface. Mutation-verified 2026-09-24 (deleting abort from the literal fails tsc); deleting that empty import silently degrades the check to vacuous (the pi-agent-core base interface is all-optional), so keep it. Related: pi-ai Static<TSchema> = unknown (execute args need no cast) and ToolInfo.parameters is TSchema (flows typed into toolWireSchema) — the three historical `as never` casts were removed 2026-09-24.
+
+- Version state 2026-09-28: host omp upgraded to 18.4.0; node_modules again drifted ahead of lock via the same unknown mechanism (installed 18.4.0 vs lock/pin 18.3.2). Guard caught it; pins synced to 18.4.0, lockfile rewritten. Regression on 18.4.0 all green: tsc 0 errors, unit 59/59, biome clean, SMOKE OK (21 tools), HARDEN OK 29/29, approval probe VERDICT B (bash hung 90s, no side effect, server alive, audit start=1 done=0). pin==host invariant current value = 18.4.0.
+
+## Q8 修订 — 文件面代码评审修复（2026-09-30）~~ — **SUPERSEDED 2026-10-01**
+
+> **已作废。** 整个文件传输面（`filetools.ts` / `fileguard.ts` / 6 个 `a2a_file_*`）已删除。以下保留为历史记录——那些 P1 缺陷本身是真实的，它们说明的是「这个状态机不该存在」，而不是「该修好它」。
+
+评审发现 4 项文件面缺陷 + 1 项版本漂移，全部修复并加了回归测试。逐项的「为什么」比「改了什么」更重要，因为它们都是**评审读不出来、只有探针能抓**的：
+
+- **分块写入必须串行 + 重传必须幂等**（P1，唯一的数据完整性问题）。旧实现读 `expectedSeq` 校验、却在 `await appendPart` 之后才自增——同一 seq 的两个并发请求都能过校验并都写入；未声明 `totalBytes` 时 `put_end` 报**成功**而文件已是双倍内容。**根因是需求自身矛盾**：README 要求调用方自设超时（无 UI 时 `prompt` 审批挂起 ≥90s），而超时重试正好并发打出两个相同 seq。修法不是「拒绝重试」，而是承认重试是常规动作：同一 transfer 的变更步骤（`put_chunk`/`put_end`）走一条 Promise 链串行化，同 seq 同字节按已收处理（返回 `duplicate: true`），同 seq 换内容才 `bad_chunk_order`。队列吞掉拒绝，单步失败不卡死后续分块。**教训：「调用方必须自设超时」这个文档承诺，同时规定了幂等性要求**——写下前一句就得写下后一句。
+- **串行化自己又带进第二个竞态：排队中的步骤必须重验活性**（P1，评审修复之后才由对抗探针抓到）。`requireTransfer` 在**同步**阶段取出记录，而变更本体稍后才在队列上跑；两者之间若一次 `put_end` 成功提交并已 `rename` 走暂存文件，排队中的 `put_chunk` 就往一条**已被改名掉的死路径**上 append——`appendFile` 会重新创建该文件，返回 `{"ok":true,"receivedBytes":12}` 而已提交文件仍只有前 8 字节：**字节静默丢失**，且在 `.tmp` 留下一份永远无人回收的孤儿 `.part`。修法：`Transfer` 自带 `id`，串行步骤内先 `requireLive(tr)`（比对 map 里仍是同一条记录）再动手。**教训：把「检查」与「动作」拆到两个时序阶段（同步取记录 / 异步执行动作）时，前者的结论会过期——凡是这种形状，异步动作开头都要重验一次。修完 P1 要立刻重新对抗，因为修复本身会制造新的竞态。**
+- **状态受会话约束 ≠ 字节受会话约束**（P2）。传输绑定 `Mcp-Session-Id`，但暂存字节就是 `<root>/.tmp/<uuid>.part` 普通文件；`.tmp` 只在 `list(".")` 被过滤，直接按路径访问不受限，于是任何客户端都能枚举他人 `transferId`、读取在途字节、`put` 改写其暂存文件让对方 `put_end` 落成攻击者字节。修法：首段为 `.tmp` 一律 `invalid_path`（嵌套 `sub/.tmp/x` 合法）。**凡是「按 id 授权」的状态，旁边一定还挂着一条按路径可达的数据路径**——两者都要封。
+- **错误码契约必须覆盖兜底分支**（P2）。`guarded` 只翻译 `FileOpError`，其余原样抛出并被 `bridge.ts` 当工具结果文本返回，于是 `ENOTDIR`/`EISDIR` + 宿主绝对路径直达调用方：既违反本项目自己的「500 body 不得泄露宿主内部」立场，又让按 `a2a_file_error <code>` 解析的客户端失效。修法：兜底码 `io_error` + 固定无路径文案，细节只进宿主 stderr。**协议里承诺了「一律是 `<code>`」，就必须给「非预期异常」也留一个码。**
+- **`get` 的 sha256 语义要选对层**（P3）。旧实现每页重算**整文件**哈希：100MB（默认 `maxFileBytes`）实测 30.4s 纯哈希 / 400 页，而每页只传 256KB——读放大 400 倍且随文件平方增长，正好卡在协议自己宣传的大文件场景上。改为**本次区间**摘要（0.9s）。`totalBytes` 仍表整文件大小，两者分工写进 protocol.md。
+- **`list` 也要拒符号链接**（P3）。只过滤了子项，目标本身用 `stat`（跟随）检查，根外目录的文件名/大小/mtime 因此泄露；内容始终被 `resolveInRoot` 的 realpath 包含性挡住，故此前仅元数据泄露。
+
+## 版本漂移的第四次复发与强制关口（2026-09-30）
+
+node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin 仍 18.4.0），版本守卫如期捕获，pin+lock 同步至 18.4.4。三次复发后加了 `.github/workflows/ci.yml`（`bun install` + typecheck + lint + test）：CI 下 frozen-lockfile 安装把「pin 与 lockfile 不一致」提前到**提交时**失败，而不是等到某人下次跑 `bun test` 才发现。**靠单测事后捕获一个反复复发的不变量，是把守卫放在了太靠后的位置。**
+
+## 方法论：这份代码要靠探针评审，不能靠读
+
+100 个单测全绿时，上述缺陷**全部存在**。逐条静态阅读都能自圆其说——`.tmp` 只在 `list(".")` 过滤看起来是「已隐藏」，`stat` 看起来是「常规存在性检查」，每页算哈希看起来是「顺手给出完整性」。它们只在**跨进程/并发的实际调用**下暴露。这与既有记录一致（`put_end` 不建父目录也是真实宿主探针抓到的，单测当时全绿）。更要紧的是第二轮的教训：**P1 修完立刻又用对抗探针（8 路同 seq、200 块长传输、40 路并发 start、排队 vs 提交）打了一遍，才抓到修复自身引入的活性竞态**——第一轮的全绿并不代表修复没有副作用。评审这类文件面/并发代码：先写复现探针再下结论，修完再打一轮对抗，单测全绿不构成正确性证据。
+
+## 文档语言分工（2026-09-30 决定）
+
+`README.md` = **英文**（GitHub 默认展示、_ZN 惯例下的基础名即默认语言），`README_ZN.md` = 中文。顶部互相链接：英文版 `[简体中文](README_ZN.md)`，中文版 `[English](README.md) | 简体中文`。
+
+**文档站仍然渲染中文**：`website/scripts/sync.mjs` 改为读 `README_ZN.md`（不是 README.md），并剥掉那行语言切换（站点单语言，站点内不需要切换入口）；标题仍是「使用指南」。若改成读 README.md，站点会在中文导航「指南」下显示英文，且 `[English](README.md)` 会指向站外不存在的路径。
+
+**教训（与 brain 里那 3 处 README 行号引用同源）**：文档之间**不要用行号互引**——README 改一次行号就全断。Q3 段落里原有 `README:103` / `README:105` 两处硬编码行号，已在 compiled_truth 内改为章节引用（「审批 / Approval」）。但 timeline 里的 3 处（append-only，历史证据）**故意保留行号不改**：timeline 记录的是「当时的事实」，改它就是篡改证据；这 3 处的失效不影响任何人，因为它们描述的是 2026-09-24 那天的状态。
+
+## 安装方式（2026-09-30 更正）
+
+**跨机器安装用 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`**（装到 `~/.omp/plugins/node_modules/pi-a2a-ext`，`omp plugin uninstall pi-a2a-ext` 卸载）；本地开发用 `omp install .`；`scripts/install.sh` 是绕开插件管理器的等效替代。
+
+`omp install` 的 spec 限制（实测）：接受**本地目录或 git URL**，**不接受 `.tgz`**（报 `ENOTDIR: ... .tgz/package.json`）；GitHub `owner/repo` 简写被当作非法包名（`Invalid package name`），必须用完整 `https://….git` URL。装的是**远端代码**，所以本地提交未推送时，装到的是旧版本——2026-09-30 就因此先装到 `@undefined` 再重装才拿到 `0.1.0`。
+
+**包必须自包含才能跨机器安装**：`package.json` 需要 `version`（缺了 `npm pack` 直接失败、`omp plugins list` 显示 `@undefined`）、`pi.extensions`（加载开关）、`files: ["extensions/", "src/"]`（入口 import 的是 `../src/*.ts`，两者缺一则装上也起不来）。不需要打包 `node_modules`：`@oh-my-pi/*` 由宿主 `omp:legacy-pi-shim` 在运行时重定向到宿主内嵌副本。tarball 实测 12 文件 25.8kB。
+
+**验证方式**：用独立 `HOME`（无 config/token/沙箱）+ 复制一份 `models.yml` 模拟另一台机器，装完启动宿主确认起桥并自建独立 token 与沙箱。中途发现 omp 在无模型配置时会**先退出、根本不加载扩展**，故模拟机必须给 `models.yml` 才能测到扩展加载。（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
+
+**此前 README 的 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 是错的**：该写法依赖调用者的 `$PWD` 恰为仓库根目录，换个目录执行就会链到不存在的路径（实测 `cd /tmp` 后链成 `/tmp/extensions/a2a-bridge.ts`），宿主加载失败但**没有任何用户可见报错**——桥只是永远不出现。**教训：文档里给出的命令若隐含「你得先 cd 到某处」这个前提而不校验，用户会踩到静默失败；安装脚本应自己推导路径并在结束时校验。**
+
+### 更正一：`omp install .` 才是首选，`pi.extensions` 是它的开关（我曾误删）
+
+**`omp install .` 从仓库根执行即可**（等价于 `plugin install`/`plugin link`），把仓库软链到 `~/.omp/plugins/node_modules/pi-a2a-ext` 并注册；`omp plugin uninstall pi-a2a-ext` 卸载。**它依赖 `package.json` 的 `"pi": { "extensions": ["./extensions/a2a-bridge.ts"] }`**——删掉该字段后 `omp install --json` 的 `manifest` 变成 `{}`，宿主**完全不加载**任何扩展（实测）。
+
+**我一度把该字段删掉并写进 CHANGELOG 说它「无效」，那是错的，已回滚。** 错因：我拿 `omp plugins list` 的输出当判据（它只列**已安装 npm 插件**，与 manifest 解析无关，我这个仓库不是 npm 插件所以查不到），而**真正的判据是 `omp install --json` 的 `manifest` 字段 + 宿主是否真的加载**。同款错误此前已在版本漂移那轮出现过一次（拿 `omp --version` 与 registry latest 混淆）——**同一个错误模式：拿「列表里没有」当「机制不支持」。**
+
+对照证据：可用插件 `@better-compact/pi` 的 package.json 同时有 `pi.extensions` / `omp.extensions` / `main` / `exports` / `files` / `keywords:["pi-package",...]`。
+
+### 更正二：单文件软链不构成障碍（曾误判）
+
+扩展入口 import 的是 `../src/*.ts`，但 Bun 解析相对导入前先 `realpath` 软链，因此软链能正确落到仓库的 `src/`（实测宿主正常起桥）。曾误判此处会断链，**靠实际安装 + 启动宿主才确认可用**。`scripts/install.sh` 保留模块齐备检查只作纵深防御。
+
+脚本自身的两个非显然细节：`--status` 判活必须用 `readlink` 原始目标 + `[ -e ]`，**不能用 `readlink -f`**——后者对悬空软链输出空串并非零退出，会让断链显示成「已安装」。安装目标若是真实文件（用户自己的扩展）一律拒绝覆盖。
+## 守卫失效的两种形态（2026-10-01）
+
+本仓库的 CI 从 `5107bad` 起就是红的，持续 9 天没人处理——`bun run lint` 报的是 `.agents/skills/design-doc-mermaid/.claude-plugin/plugin.json` 与 `skills-lock.json` 两个文件的 **format**（上游用空格缩进，`biome.json` 配的是 `indentStyle: "tab"`），**零逻辑缺陷**。已定位到引入提交：`5107bad` 之前 `biome check .` 是 25 文件 0 错误，之后 3 错误。
+
+**这与版本漂移是同一个模式。** 那次的教训是「靠单测事后捕获一个反复复发的不变量，是把守卫放在了太靠后的位置」；这次更靠前一步——**守卫彻底失效，且因为它一直红，反而没人发现**。一个必然失败的检查等于没有检查：它不提供信息，只提供噪音，人看久了就学会无视红灯。**「CI 一直红」和「CI 一直是绿的但没检查该查的东西」是同一种失效，都表现为「没人发现问题」。**
+
+修法不是格式化那两个文件（下次重装 skill 会被覆盖），而是**把它们移出 biome 管辖范围**：`biome.json` 的 `files.includes` 加 `!.agents` 与 `!skills-lock.json`。依据是 gitignore 与 biome 划的是**两个不同维度**——gitignore 管「不该进版本库」，biome 管「该由本仓库负责」。`.agents/` 与 `skills-lock.json` 是外部 skill 安装器的产物，和 `node_modules/` 同类，只是恰好被提交进了版本库；提交进 git 只改变它被追踪的状态，不改变它的来源。`!.agents` 按目录排除，覆盖将来安装的任何 skill（已实测：新建 `.agents/skills/fake-skill/plugin.json` 后 lint 仍绿）。注意 biome 2.2.0 起忽略目录**不写** `/**`，写成 `!.agents/**` 会触发 `lint/suspicious/useBiomeIgnoreFolder`。
+
+**教训：发现守卫失效时，先问「它为什么失效」，而不是逐个修它报出的错。** 逐个修是治标，且下次重装即复发。
+
+## 极简化（2026-10-01 决定，推翻 Q4 与 Q8）
+
+四条原则：**极简 / 不重复造轮子 / 不替 omp 实现沙盒 / 不替 omp 管权限。** 桥缩回接口转换器，源码 1460 → 655 行。
+
+**Q4 的 `deny` / `denyMCPTools` 取消。** `tools/list` 就是 `pi.getAllTools()`，**原样透传不过滤**——含 `hidden` 工具、也含宿主当前对自己模型禁用的工具。**omp 是什么权限，桥就是什么权限。** 理由不是「更简单」，而是 `deny` 是第二套权限名单：它与宿主自己的工具配置可以互相矛盾，而代码里没有定义冲突时谁优先（`src/bridge.ts` 只做 `isDenied` 短路，宿主侧管不到）。配置只剩 `port` / `host` / `token`。
+
+**Q8 整个文件传输面删除**（`src/filetools.ts` 460 行 + `src/fileguard.ts` 215 行 + 6 个 `a2a_file_*` + 11 个错误码 + 37 处传输状态机）。三条理由：**(1) 重复造轮子**——远程本来就能调宿主 `bash`，`cat` / `base64 -d >` / `ls` / `dd` 分别覆盖 get / put / list / 分块。**(2) 沙盒是替 omp 做的**，而桥自带工具**绕过宿主审批门**（`src/bridge.ts` 原注释：bridge tools bypass the host's approval gate）——绕过审批就得自带隔离，两者同源，所以要一起删；只删沙盒会留下「谁都不管」的洞。**(3) 代价可量化**——675 行实现 + 1216 行测试（测试是实现两倍），且状态机自己生产了两个 P1：seq 校验 TOCTOU 致并发重试静默写坏文件、串行化修复自身引入的活性竞态。
+
+保留的有价值判断（不随删除作废）：**执行必须走宿主原生 `getToolByName().execute()`，注入真实 `session.settings` 与 `ExtensionContext ui`**，这样宿主的 `ExtensionToolWrapper` 审批门照常生效——桥自己一套审批逻辑都不实现。**调用与列表同源**（`tools/call` 只接受出现在 `tools/list` 的名字，别名 `xd://bash` 与未注册名一律 `not exposed`，且不区分「被过滤」与「不存在」）这条不依赖 `deny`，仍然成立。
+
+代价（如实）：100MB 文件不走 MCP 通道（走 SSH/`scp`，README 早已这么建议）；原子落盘（`.tmp` + `rename` + 0600）没有了，远程写文件用宿主的 `edit`/`bash`；远程会看到 `hidden` 工具——这是「不过滤」的必然结果。
+
+**教训：桥自带工具绕过宿主审批门，所以不得不自带沙箱——这是一个决定的两个后果，要一起删。** 只删其中一个，会得到一个比原来更糟的中间态。
 ## Timeline
 
 - time: 2026-09-10T09:16:34
@@ -284,4 +388,16 @@ Q1 执行目标在宿主 Main 会话内；Q2 传输为 Streamable HTTP on 127.0.
   kind: decision
   summary: "sync.mjs 补 CHANGELOG 的链接重写（此前完全没有）：条目里的 docs/*.md 仓库相对路径在站点上是死链，VitePress 会构建失败。一直没暴露是因为 CHANGELOG 只引用过站点同名的 protocol/testing，新增 computer-use.md 才触发。另将 config.ts 里重复的 description/兜底值提取为 SITE_DESC 单点引用。"
   source: "站点文案校订 2026-10-01"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-01T13:18:55
+  kind: decision
+  summary: "恢复被上一次 update-truth 压掉的 Q1–Q8 与方法论全文，并新增「守卫失效的两种形态」一节"
+  source: "lint 修复轮 2026-10-01（修正上轮 compiled_truth 的信息损失）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-01T13:49:26
+  kind: reversal
+  summary: "推翻 Q4 的 deny/暴露交集与 Q8 的整个文件传输面——按「极简/不重复造轮子/不替 omp 实现沙盒/不替 omp 管权限」四条，桥缩回接口转换器：源码 1460 → 655 行。删 src/filetools.ts + src/fileguard.ts（675 行）与 6 个 a2a_file_*，删 deny/denyMCPTools 与 fileRoot/maxFileBytes。tools/list 改为 pi.getAllTools() 原样透传不过滤（含 hidden 工具、含宿主对自己模型禁用的工具）——omp 是什么权限桥就是什么权限，删掉的是第二套与宿主可冲突且无优先级的权限名单。**教训一：桥自带工具绕过宿主审批门，所以不得不自带沙箱——这是同一个决定的两个后果，要一起删，只删一个会留下「谁都不管」的洞。教训二：为已有能力（bash 的 cat/base64/ls/dd）造轮子的代价可量化——675 行实现 + 1216 行测试，且状态机自己生产了两个 P1（seq TOCTOU 写坏文件、串行化修复自身引入的活性竞态）。**"
+  source: "极简化轮 2026-10-01"
   affects: [a2a-mcp-bridge]

@@ -17,11 +17,9 @@ graph TB
         Serve["⚙️ src/server.ts<br/>Bun.serve · auth + protocol<br/>tools/list · tools/call"]
         Bridge["🌉 src/bridge.ts<br/>pi.getAllTools() · Main session"]
         Tools["🛠️ host's real tools<br/>read · bash · edit"]
-        Files["📦 a2a_file_*<br/>bidirectional file transfer"]
 
         Serve -->|"getToolByName().execute()"| Bridge
         Bridge --> Tools
-        Bridge --> Files
     end
 
     Client -->|"HTTP/JSON-RPC<br/>2025-11-25 · Bearer token"| Serve
@@ -29,16 +27,14 @@ graph TB
     classDef client fill:#FFE66D,stroke:#F08C00,color:#000
     classDef server fill:#4ECDC4,stroke:#0B7285,color:#fff
     classDef tool fill:#A8DADC,stroke:#1864AB,color:#000
-    classDef owned fill:#95E1D3,stroke:#087F5B,color:#000
     class Client client
     class Serve,Bridge server
     class Tools tool
-    class Files owned
 ```
 
 - The extension starts `Bun.serve` on `session_start` and implements MCP `2025-11-25`'s `initialize` / `tools/list` / `tools/call`, answering with plain JSON (no SSE).
 - The tool catalog comes from the host's current session (`pi.getAllTools()`); execution always routes to `getToolByName` on the host's `Main` session, so calls run the host's own tool implementations.
-- Alongside the host tools, the bridge contributes 6 `a2a_file_*` tools of its own (bidirectional file transfer, see [File transfer](#file-transfer)): appended after the host tools, yielding to the host on a name collision, and equally subject to `deny`.
+- The catalog is the host registry as-is; the bridge does not filter it (see [Security and boundaries](#security-and-boundaries)).
 - Remote calls involve no model inference at all: the host only receives a request, runs a tool, and returns the result.
 
 ## Install
@@ -90,7 +86,7 @@ A2A bridge listening on http://127.0.0.1:<port> (token <first 6 chars>…)
 The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with mode `0600` (created at that mode, so there is no permission window):
 
 ```json
-{ "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "deny": [], "denyMCPTools": false, "maxFileBytes": 104857600 }
+{ "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1" }
 ```
 
 | Field | Meaning |
@@ -98,16 +94,13 @@ The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with
 | `port` | `0` = random port; set a number to pin it |
 | `token` | Bearer token, generated on first start |
 | `host` | Listen address, default `127.0.0.1` (a warning is added if you change it to `0.0.0.0`) |
-| `deny` | Tool names to withhold |
-| `denyMCPTools` | `true` excludes every `mcp__`-prefixed tool |
-| `fileRoot` | Sandbox root for file transfer, default `~/.omp/a2a-bridge-files` (same `~/.omp` as the config/audit files but a **different directory**). To change it, write an **absolute path** — `~` is not expanded in config |
-| `maxFileBytes` | Per-file size cap, default `104857600` (100MB), allowed range 1KB–1GB |
+Only those three. **There is no tool allow/deny list and no file sandbox** — the bridge makes no permission decision of its own, so adding such fields to the config has no effect (unknown fields are ignored).
 
 `A2A_BRIDGE_CONFIG` overrides the config path; `A2A_BRIDGE_AUDIT` overrides the audit log path.
 
-Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `deny` not an array of strings, `denyMCPTools` not a boolean, `host` not a non-empty string, `fileRoot` not an absolute path, `maxFileBytes` not an integer or out of range) makes the extension refuse to start and report an error, rather than running with a wrong exposure surface. The one exception is `token`: when missing or invalid it is regenerated and **written back to the config**, so it stays stable across restarts.
+Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `host` not a non-empty string) makes the extension refuse to start and report an error. The one exception is `token`: when missing or invalid it is regenerated and **written back to the config**, so it stays stable across restarts.
 
-Other config edits (such as `deny`) take effect on the **next host restart**; to change only the token at runtime, use `/a2a rotate` (immediate, and the old token stops working at once).
+Config edits take effect on the **next host restart**; to change only the token at runtime, use `/a2a rotate` (immediate, and the old token stops working at once).
 
 ### Commands
 
@@ -155,40 +148,23 @@ Remote calls reuse the host's approval gate (`ExtensionToolWrapper`) entirely an
 
 ## File transfer
 
-The bridge ships 6 `a2a_file_*` tools that move files in both directions: remote → host (push) and host → remote (pull). They travel the same `tools/list` / `tools/call` pipeline as host tools, so they inherit the same auth, session, `deny` gate and audit trail; **no new JSON-RPC methods are added**. The wire format reuses the A2A FilePart `{name, mimeType, bytes(base64)}` shape.
+The bridge ships no file tools. To move files between machines, use the host's own tools (the remote side sees `mcp__omp-host__read`, `mcp__omp-host__bash`, …), or SSH for large payloads:
 
-- Remote tool names look like `mcp__omp-host__a2a_file_put` (the prefix depends on the server name in `mcp.json`).
-- Every `path` is relative to `fileRoot` (the sandbox root, created `0700` at startup), **not** a host filesystem path. Writes always land atomically (write `fileRoot/.tmp/<uuid>.part` first, then `rename`), with file mode `0600`.
-- The per-file cap is `maxFileBytes` (default 100MB). Inline and per-chunk payloads decode to ≤ 512KiB, and a single read response is ≤ 256KiB:
-
-```text
-# small file (≤512KB) in one call
-a2a_file_put { "path": "inbox/note.md", "file": { "mimeType": "text/markdown", "bytes": "<base64>" } }
-
-# large file in chunks (100MB ≈ 200 chunks); seq starts at 0 and must be contiguous
-a2a_file_put_start { "path": "bulk/data.tar", "totalBytes": 1048576 }   -> { "transferId": "..." }
-a2a_file_put_chunk { "transferId": "...", "seq": 0, "bytes": "<base64>" }
-a2a_file_put_end   { "transferId": "..." }                              -> { "path", "bytes", "sha256" }
-
-# reading (page until eof)
-a2a_file_get { "path": "bulk/data.tar", "offset": 0, "limit": 262144 }  -> { "bytes", "totalBytes", "eof" }
-a2a_file_list { "path": "inbox" }                                       -> { "entries": [...] }
+```sh
+scp ./data.tar user@host:~/data.tar
 ```
 
-- Failures are always `isError: true` plus the text `a2a_file_error <code>: <message>`, where `<code>` is a stable enum (`invalid_path` `escapes_root` `symlink_refused` `not_found` `is_a_directory` `already_exists` `too_large` `bad_base64` `bad_chunk_order` `unknown_transfer` `size_mismatch` `io_error`). **No bare errno, no host paths**: when the host filesystem itself fails (`ENOTDIR`/`EISDIR`/`ENOSPC` and friends) the call reports the catch-all code `io_error`, and the details go only to the host's stderr. Protocol details (chunk retry idempotency, the staging directory not being addressable, chunk state bound to a session, 30-minute idle reclamation, caps) are in [docs/protocol.md](docs/protocol.md) under "The bridge's own tools".
-- **Retransmits are idempotent**: the same `seq` with the same `bytes` arriving again is treated as already received (returning `duplicate: true`) instead of being appended twice, so the file is never corrupted — as noted above, "callers must impose their own timeout" makes a timeout retry a routine move. The same `seq` with *different* content is still `bad_chunk_order`.
-- `deny` applies to these tools too: `"deny": ["a2a_file_put", "a2a_file_put_start", "a2a_file_put_chunk", "a2a_file_put_end"]` leaves reads but no writes. To turn file transfer off entirely, deny all 6 names.
+The bridge sets no `fileRoot`, no `deny` list, and does not interpret paths — calls land on the host's real files and shell, and the host's own configuration decides what is permitted (see "Security and boundaries").
 
 ## Security and boundaries
 
 - **The token is full tool-execution authority (under the default config)**: the host's default `approvalMode: yolo` means anyone holding the token can execute any exposed tool (including `bash`) directly in the host session with no approval step; only tools the host configures as `prompt` have a gate that can stop them (see [Approval](#approval) for the no-UI case). Keep the config file at `0600` and out of version control.
-- **The bridge's own tools (file transfer) do not pass through the host's approval gate**: `a2a_file_*` are not host tools, so `tools.approval` has no effect on them — holding the token equals read/write authority **inside** `fileRoot` (a deliberate trade-off: it buys reuse of the same pipeline). The sandbox is what holds the line: paths reject absolute paths, `..`, NUL, control characters and `.` segments; the deepest existing ancestor is `realpath`ed and must still be inside `fileRoot`; symlinks inside the root are neither followed for reading nor for writing (`symlink_refused`, `a2a_file_list` included — otherwise it would leak filenames/sizes/mtimes from outside the root); `fileRoot` itself must not be a symlink, nor an ancestor of the config file or audit log (otherwise startup fails). **The staging directory `.tmp` is not addressable** (a leading `.tmp` segment is always `invalid_path`): a transfer is bound to an `Mcp-Session-Id`, but the staged bytes are ordinary files, so if `.tmp` were reachable any client could enumerate other sessions' `transferId`s and read or rewrite their in-flight uploads.
-- **Bytes pulled back land in the remote context**: `a2a_file_get`'s base64 is a tool result and enters the remote model's session history. The protocol supports 100MB, but large binaries should go over SSH/`scp` instead of this channel.
+- **The bridge makes no permission decision**: `tools/list` is the host session's registry (`pi.getAllTools()`), passed through verbatim with no filtering. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
+- **Execution goes through the host's native tools**: `tools/call` routes to `getToolByName().execute()` on the host's `Main` session with the real `session.settings` and `ExtensionContext ui` injected, so the host's approval gate (`ExtensionToolWrapper`) applies as usual. The bridge implements no approval logic of its own.
+- **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list`; aliases (such as `xd://bash`) and unregistered names are refused, and a refusal does not distinguish "filtered" from "nonexistent" (so it does not leak whether a name exists).
 - Loopback-only by default; if you really do expose it, the firewall is your responsibility.
-- **Exposure semantics = the full session tool registry**: `tools/list` comes straight from `pi.getAllTools()` (the Main session registry), so it includes `hidden` tools and tools the host model currently has disabled — it is *not* a mirror of "what the host model can currently see". Tighten it with `deny` / `denyMCPTools`.
-- **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list` (after deny filtering); aliases (such as `xd://bash`) and unlisted names are refused, and a refusal does not distinguish "denied" from "nonexistent" (so it does not leak whether a name exists). The deny decision is made once on each side, list and call.
 - **Sessions are mandatory**: every message except `initialize` must carry `Mcp-Session-Id` (missing → 400, unknown or idle past 24h → 404). At most 64 sessions are tracked, with the least-recently-seen evicted beyond that; every hit refreshes the idle timer.
-- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI); if rotation lands mid-call, the paired records can end up split across `.1` and the current file. Audit write failures never affect the call. Strings longer than 120 characters in the args (file base64 bodies) are recorded as `<len:N,sha256:first 8>` so the log never holds payloads; `a2a_file_put_chunk` is not recorded at all (one upload would otherwise be hundreds of lines), with the start/end records bracketing the whole transfer.
+- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI); if rotation lands mid-call, the paired records can end up split across `.1` and the current file. Audit write failures never affect the call. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads.
 - If the configured port is busy, the bridge falls back to an ephemeral port and warns (update the port in the remote `mcp.json`).
 
 How this differs from computer use (guessing pixel coordinates on a screenshot) is in [docs/computer-use.md](docs/computer-use.md).
@@ -212,7 +188,7 @@ v1 boundaries:
 - **Cannot connect / wrong port**: if the configured port is busy at host startup, the bridge falls back to a random port and warns in the notification bar — use the actual port shown there or in `/a2a` to update `mcp.json`.
 - **A call never returns**: the host has no interactive UI and the tool's approval is `prompt` (see [Approval](#approval)) — the command does not execute, but neither does the call return; the caller must impose its own timeout, and the audit log shows a `start` with no `done` for that call (see the audit-log bullet under [Security and boundaries](#security-and-boundaries)).
 - **500 `internal error`**: an internal server fault; the response body is deliberately detail-free (to avoid leaking), and the real cause is in the host's stderr as `[a2a-bridge] internal error: …`.
-- **Config edits do not take effect**: external edits to `a2a-bridge.json` (such as `deny` or `port`) need a host restart; only `/a2a rotate` applies live at runtime.
+- **Config edits do not take effect**: external edits to `a2a-bridge.json` (such as `port`) need a host restart; only `/a2a rotate` applies live at runtime.
 - **`bun test` version guard fails** (development): the installed `@oh-my-pi/pi-*` is out of sync with the pin/lock — `bun install` restores it; an `omp --version` that differs from the pin only warns, so update the two exact versions in `package.json` when you upgrade the host.
 
 ## Development
@@ -226,7 +202,6 @@ bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposur
 bun run test:smoke    # real E2E (needs a local omp + ~/.omp/agent/models.yml; run manually)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp; run manually)
 bun run test:approval  # approval-boundary discriminating check, ~2 minutes (needs a local omp; run manually)
-bun run test:files    # real-host file-transfer checks, 71 items (needs a local omp; run manually)
 bun run test:install  # cross-machine install check, 26 items (isolated HOME + omp install <git-url>; run manually)
 ./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
@@ -243,9 +218,7 @@ File layout:
 | `extensions/a2a-bridge.ts` | Extension entry point: starts the server on `session_start`, registers `/a2a` |
 | `src/server.ts` | `Bun.serve` + JSON-RPC (MCP 2025-11-25, plain JSON responses), sessions and version negotiation |
 | `src/bridge.ts` | Tool catalog and execution (`pi.getAllTools` / AgentRegistry Main session), exposure-intersection decision |
-| `src/fileguard.ts` | Path sandbox: lexical rejection, realpath containment, symlink refusal, atomic writes |
-| `src/filetools.ts` | The bridge's own `a2a_file_*` tools, chunked transfers, error-code mapping |
-| `src/config.ts` | Config load/save, field validation, token generation, deny decision |
+| `src/config.ts` | Config load/save, field validation, token generation |
 | `src/auth.ts` | Bearer token verification (timing-safe comparison) |
 | `src/audit.ts` | Audit log for remote calls (two-phase JSONL `start`/`done`, rotation) |
 

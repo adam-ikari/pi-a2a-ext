@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { BridgeConfig } from "../src/config.ts";
-import { configPath, DEFAULT_MAX_FILE_BYTES, generateToken, isDenied, loadConfig, saveConfig } from "../src/config.ts";
+import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
 
 let dir: string;
 let file: string;
@@ -13,10 +13,6 @@ const VALID: BridgeConfig = {
 	port: 1234,
 	token: "unit-test-token",
 	host: "127.0.0.1",
-	deny: ["bash", "write"],
-	denyMCPTools: true,
-	fileRoot: "/tmp/a2a-unit-files",
-	maxFileBytes: 1048576,
 };
 
 beforeAll(async () => {
@@ -38,10 +34,6 @@ describe("loadConfig", () => {
 		const cfg = await loadConfig(env);
 		expect(cfg.port).toBe(0);
 		expect(cfg.host).toBe("127.0.0.1");
-		expect(cfg.deny).toEqual([]);
-		expect(cfg.denyMCPTools).toBe(false);
-		expect(isAbsolute(cfg.fileRoot)).toBe(true);
-		expect(cfg.maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES);
 		expect(cfg.token).toHaveLength(43); // 32 random bytes, base64url
 	});
 
@@ -72,11 +64,6 @@ describe("loadConfig", () => {
 		await expect(loadConfig(env)).rejects.toThrow("expected a JSON object");
 	});
 
-	test("deny of the wrong type -> fail-closed", async () => {
-		await writeFile(file, JSON.stringify({ ...VALID, deny: "bash" }));
-		await expect(loadConfig(env)).rejects.toThrow(`field 'deny' must be an array`);
-	});
-
 	test("port of the wrong type -> fail-closed", async () => {
 		await writeFile(file, JSON.stringify({ ...VALID, port: "8080" }));
 		await expect(loadConfig(env)).rejects.toThrow(`field 'port' must be an integer`);
@@ -87,30 +74,13 @@ describe("loadConfig", () => {
 		await expect(loadConfig(env)).rejects.toThrow(`field 'port' must be an integer`);
 	});
 
-	test("denyMCPTools of the wrong type -> fail-closed", async () => {
-		await writeFile(file, JSON.stringify({ ...VALID, denyMCPTools: "yes" }));
-		await expect(loadConfig(env)).rejects.toThrow(`field 'denyMCPTools' must be a boolean`);
-	});
-
-	test("relative fileRoot -> fail-closed", async () => {
-		await writeFile(file, JSON.stringify({ ...VALID, fileRoot: "relative/dir" }));
-		await expect(loadConfig(env)).rejects.toThrow(`field 'fileRoot' must be a non-empty absolute path`);
-	});
-
-	test("fileRoot of the wrong type -> fail-closed", async () => {
-		await writeFile(file, JSON.stringify({ ...VALID, fileRoot: 42 }));
-		await expect(loadConfig(env)).rejects.toThrow(`field 'fileRoot' must be a non-empty absolute path`);
-	});
-
-	test("maxFileBytes out of range -> fail-closed", async () => {
-		await writeFile(file, JSON.stringify({ ...VALID, maxFileBytes: 10 }));
-		await expect(loadConfig(env)).rejects.toThrow(`field 'maxFileBytes' must be an integer`);
-		await writeFile(file, JSON.stringify({ ...VALID, maxFileBytes: 2 * 1024 * 1024 * 1024 }));
-		await expect(loadConfig(env)).rejects.toThrow(`field 'maxFileBytes' must be an integer`);
+	test("host of the wrong type -> fail-closed", async () => {
+		await writeFile(file, JSON.stringify({ ...VALID, host: "" }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'host' must be a non-empty string`);
 	});
 
 	test("missing token -> regenerated and persisted (stable across restarts)", async () => {
-		await writeFile(file, JSON.stringify({ port: 0, host: "127.0.0.1", deny: [], denyMCPTools: false }));
+		await writeFile(file, JSON.stringify({ port: 0, host: "127.0.0.1" }));
 		const first = await loadConfig(env);
 		const onDisk = JSON.parse(await readFile(file, "utf8")) as { token?: unknown };
 		expect(onDisk.token).toBe(first.token);
@@ -124,16 +94,6 @@ describe("loadConfig", () => {
 		expect(typeof cfg.token).toBe("string");
 		expect(cfg.token).not.toBe("12345");
 	});
-});
-
-describe("isDenied", () => {
-	const cfg: BridgeConfig = { ...VALID, deny: ["bash"], denyMCPTools: true };
-
-	test("exact deny match", () => expect(isDenied(cfg, "bash")).toBe(true));
-	test("denyMCPTools blocks the mcp__ prefix", () => expect(isDenied(cfg, "mcp__srv__tool")).toBe(true));
-	test("allowed tool passes", () => expect(isDenied(cfg, "read")).toBe(false));
-	test("denyMCPTools off allows mcp tools", () =>
-		expect(isDenied({ ...cfg, denyMCPTools: false }, "mcp__srv__tool")).toBe(false));
 });
 
 describe("generateToken", () => {

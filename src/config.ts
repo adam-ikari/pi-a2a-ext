@@ -1,16 +1,21 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, normalize } from "node:path";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
+/**
+ * The bridge configures the endpoint, nothing else.
+ *
+ * There is no tool allow/deny list and no file sandbox here on purpose: the
+ * bridge exposes whatever the host session's registry holds (`pi.getAllTools()`)
+ * and executes through the host's own tools, so the host's permission model is
+ * the only one. A second list here could disagree with the host's, and there is
+ * no defined precedence between the two.
+ */
 export interface BridgeConfig {
 	port: number; // 0 = random
 	token: string; // base64url 32B
 	host: string; // default "127.0.0.1"
-	deny: string[]; // tool names to hide
-	denyMCPTools: boolean;
-	fileRoot: string; // sandbox dir for a2a_file_* tools (absolute)
-	maxFileBytes: number; // per-file size cap for transfers
 }
 
 export function generateToken(): string {
@@ -21,20 +26,9 @@ export function configPath(env: NodeJS.ProcessEnv = process.env): string {
 	return env.A2A_BRIDGE_CONFIG || join(getAgentDir(), "a2a-bridge.json");
 }
 
-/** Default lives beside (not inside) the agent dir: the file root must never
- * contain the token config or the audit log. */
-export function defaultFileRoot(): string {
-	return join(dirname(getAgentDir()), "a2a-bridge-files");
-}
-
-export const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
-
-const DEFAULTS: Omit<BridgeConfig, "token" | "fileRoot"> = {
+const DEFAULTS: Omit<BridgeConfig, "token"> = {
 	port: 0,
 	host: "127.0.0.1",
-	deny: [],
-	denyMCPTools: false,
-	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
 };
 
 function fieldError(file: string, field: string, expect: string): Error {
@@ -45,10 +39,9 @@ function fieldError(file: string, field: string, expect: string): Error {
  * Load ~/.omp/agent/a2a-bridge.json (or $A2A_BRIDGE_CONFIG).
  *
  * Fail-closed: a present-but-malformed field throws, so the extension refuses
- * to start rather than silently running with wrong exposure (e.g. a `deny`
- * that isn't an array would otherwise disable filtering entirely). The one
- * exception is `token`: a missing/invalid token is regenerated and persisted,
- * because a bridge without a stable token cannot function at all.
+ * to start rather than coming up on an unexpected endpoint. The one exception
+ * is `token`: a missing/invalid token is regenerated and persisted, because a
+ * bridge without a stable token cannot function at all.
  */
 export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig> {
 	const file = configPath(env);
@@ -57,7 +50,7 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 		raw = await readFile(file, "utf8");
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-			return { ...DEFAULTS, fileRoot: defaultFileRoot(), token: generateToken() };
+			return { ...DEFAULTS, token: generateToken() };
 		}
 		throw e;
 	}
@@ -71,7 +64,7 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 		throw new Error(`Invalid config at ${file}: expected a JSON object`);
 	}
 	const p = parsed as Record<string, unknown>;
-	const cfg: BridgeConfig = { ...DEFAULTS, fileRoot: defaultFileRoot(), token: generateToken() };
+	const cfg: BridgeConfig = { ...DEFAULTS, token: generateToken() };
 
 	if ("port" in p) {
 		if (typeof p.port !== "number" || !Number.isInteger(p.port) || p.port < 0 || p.port > 65535) {
@@ -84,40 +77,6 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 			throw fieldError(file, "host", "a non-empty string");
 		}
 		cfg.host = p.host;
-	}
-	if ("deny" in p) {
-		if (!Array.isArray(p.deny) || p.deny.some((d) => typeof d !== "string")) {
-			throw fieldError(file, "deny", "an array of tool-name strings");
-		}
-		cfg.deny = p.deny as string[];
-	}
-	if ("denyMCPTools" in p) {
-		if (typeof p.denyMCPTools !== "boolean") {
-			throw fieldError(file, "denyMCPTools", "a boolean");
-		}
-		cfg.denyMCPTools = p.denyMCPTools;
-	}
-	if ("fileRoot" in p) {
-		if (
-			typeof p.fileRoot !== "string" ||
-			p.fileRoot.length === 0 ||
-			p.fileRoot.includes("\0") ||
-			!isAbsolute(normalize(p.fileRoot))
-		) {
-			throw fieldError(file, "fileRoot", "a non-empty absolute path");
-		}
-		cfg.fileRoot = normalize(p.fileRoot);
-	}
-	if ("maxFileBytes" in p) {
-		if (
-			typeof p.maxFileBytes !== "number" ||
-			!Number.isInteger(p.maxFileBytes) ||
-			p.maxFileBytes < 1024 ||
-			p.maxFileBytes > 1024 * 1024 * 1024
-		) {
-			throw fieldError(file, "maxFileBytes", "an integer in [1024, 1073741824]");
-		}
-		cfg.maxFileBytes = p.maxFileBytes;
 	}
 
 	if (typeof p.token === "string" && p.token.length > 0) {
@@ -137,8 +96,4 @@ export async function saveConfig(cfg: BridgeConfig, env?: NodeJS.ProcessEnv): Pr
 	// rotation correct for a file that already exists with looser permissions.
 	await writeFile(file, `${JSON.stringify(cfg, null, "\t")}\n`, { mode: 0o600 });
 	await chmod(file, 0o600);
-}
-
-export function isDenied(cfg: BridgeConfig, name: string): boolean {
-	return cfg.deny.includes(name) || (cfg.denyMCPTools && name.startsWith("mcp__"));
 }

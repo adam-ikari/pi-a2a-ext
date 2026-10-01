@@ -5,8 +5,6 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { auditLogPath } from "../src/audit.ts";
 import { buildCallTool, buildToolCatalog } from "../src/bridge.ts";
-import type { BridgeConfig } from "../src/config.ts";
-import type { BridgeTool } from "../src/filetools.ts";
 import type { McpContent } from "../src/server.ts";
 
 interface FakeTool {
@@ -28,16 +26,6 @@ function makePi(names: string[]): ExtensionAPI {
 // lookup is exercised for its absent-session branch only (the real execution
 // path needs a live host and is covered by test/smoke.ts).
 const extCtx = {} as ExtensionContext;
-
-const cfg: BridgeConfig = {
-	port: 0,
-	token: "t",
-	host: "127.0.0.1",
-	deny: ["hidden_tool"],
-	denyMCPTools: true,
-	fileRoot: "/tmp/a2a-bridge-test-files",
-	maxFileBytes: 1024 * 1024,
-};
 
 // Sandbox the audit log for the WHOLE file, not just the audit test: every
 // buildCallTool path (including the exposure-gate rejections) appends, and
@@ -86,30 +74,28 @@ async function callText(
 }
 
 describe("buildToolCatalog", () => {
-	test("exposes everything except denied and mcp__ tools", async () => {
-		const pi = makePi(["read", "hidden_tool", "mcp__srv__tool"]);
-		const catalog = await buildToolCatalog(pi, cfg)();
-		expect(catalog.map((t) => t.name)).toEqual(["read"]);
+	test("passes the host registry through verbatim — nothing filtered", async () => {
+		// Including hidden tools, mcp__ names, and anything else the host
+		// registered: the bridge holds no opinion on what a caller may see.
+		const names = ["read", "hidden_tool", "mcp__srv__tool", "bash"];
+		const catalog = await buildToolCatalog(makePi(names))();
+		expect(catalog.map((t) => t.name)).toEqual(names);
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object" });
 	});
 
-	test("denyMCPTools off keeps mcp tools", async () => {
-		const pi = makePi(["mcp__srv__tool"]);
-		const catalog = await buildToolCatalog(pi, { ...cfg, denyMCPTools: false })();
-		expect(catalog.map((t) => t.name)).toEqual(["mcp__srv__tool"]);
+	test("re-reads the registry on every call so dynamic tools appear", async () => {
+		let names = ["read"];
+		const pi = { getAllTools: () => names.map((n) => ({ name: n, description: "", parameters: {} })) };
+		const catalog = buildToolCatalog(pi as unknown as ExtensionAPI);
+		expect((await catalog()).map((t) => t.name)).toEqual(["read"]);
+		names = ["read", "added_later"];
+		expect((await catalog()).map((t) => t.name)).toEqual(["read", "added_later"]);
 	});
 });
 
 describe("buildCallTool exposure gate", () => {
-	test("denied tool -> not exposed", async () => {
-		const call = buildCallTool(makePi(["read", "hidden_tool"]), extCtx, cfg);
-		const r = await callText(call, "hidden_tool");
-		expect(r.isError).toBe(true);
-		expect(r.text).toContain("not exposed");
-	});
-
-	test("name outside the advertised catalog -> not exposed (alias/hidden-name probe)", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
+	test("name outside the advertised registry -> not exposed (alias/hidden-name probe)", async () => {
+		const call = buildCallTool(makePi(["read"]), extCtx);
 		for (const name of ["xd://read", "guessed_tool", "mcp__srv__tool"]) {
 			const r = await callText(call, name);
 			expect(r.isError).toBe(true);
@@ -117,8 +103,8 @@ describe("buildCallTool exposure gate", () => {
 		}
 	});
 
-	test("advertised tool with no Main session -> clear error, not a throw", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
+	test("registered tool with no Main session -> clear error, not a throw", async () => {
+		const call = buildCallTool(makePi(["read"]), extCtx);
 		const r = await callText(call, "read");
 		expect(r.isError).toBe(true);
 		expect(r.text).toBe("main session not available");
@@ -140,7 +126,7 @@ describe("audit log", () => {
 	}
 
 	test("phase:start at dispatch + phase:done on completion, paired by id", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
+		const call = buildCallTool(makePi(["read"]), extCtx);
 		await call("read", { path: "/etc/hostname" }, "sess-1");
 
 		// Match by content, not position: earlier tests append to this same
@@ -160,7 +146,7 @@ describe("audit log", () => {
 	});
 
 	test("rejected calls are audited with both phases", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, cfg);
+		const call = buildCallTool(makePi(["read"]), extCtx);
 		await call("guessed_tool", {});
 
 		const start = await untilRecord((l) => l.phase === "start" && l.tool === "guessed_tool");
@@ -172,52 +158,11 @@ describe("audit log", () => {
 		expect(done).toMatchObject({ isError: true });
 		expect(done?.id).toBe(start?.id);
 	});
-});
-
-function fakeBridgeTool(name: string): BridgeTool {
-	return {
-		name,
-		description: `${name} bridge tool`,
-		inputSchema: { type: "object", properties: {}, additionalProperties: false },
-		async execute() {
-			return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }], isError: false };
-		},
-	};
-}
-
-describe("bridge-owned tools", () => {
-	test("advertised after the host catalog when no host tool claims the name", async () => {
-		const catalog = await buildToolCatalog(makePi(["read"]), cfg, [fakeBridgeTool("a2a_file_put")])();
-		expect(catalog.map((t) => t.name)).toEqual(["read", "a2a_file_put"]);
-	});
-
-	test("a host tool with the same name wins: the bridge tool is neither listed nor callable", async () => {
-		const pi = makePi(["a2a_file_put"]);
-		const tools = [fakeBridgeTool("a2a_file_put")];
-		const catalog = await buildToolCatalog(pi, cfg, tools)();
-		expect(catalog.map((t) => t.name)).toEqual(["a2a_file_put"]);
-		// The single entry is the host tool (host schema, not the bridge's).
-		expect(catalog[0]?.description).toBe("a2a_file_put tool");
-		// Calling it goes down the host path -> absent Main session, not the bridge handler.
-		const call = buildCallTool(pi, extCtx, cfg, tools);
-		const r = await callText(call, "a2a_file_put");
-		expect(r.text).toBe("main session not available");
-	});
-
-	test("deny hides bridge tools too", async () => {
-		const tools = [fakeBridgeTool("a2a_file_put")];
-		const catalog = await buildToolCatalog(makePi([]), { ...cfg, deny: ["a2a_file_put"] }, tools)();
-		expect(catalog).toEqual([]);
-		const call = buildCallTool(makePi([]), extCtx, { ...cfg, deny: ["a2a_file_put"] }, tools);
-		const r = await call("a2a_file_put", {}, "s");
-		expect(r.isError).toBe(true);
-		expect(r.content[0]).toMatchObject({ text: "tool 'a2a_file_put' is not exposed by this bridge" });
-	});
 
 	test("oversized string args are redacted to length+hash in the audit line", async () => {
 		const payload = "A".repeat(5000);
-		const call = buildCallTool(makePi(["read"]), extCtx, cfg, [fakeBridgeTool("a2a_echo")]);
-		await call("a2a_echo", { bytes: payload }, "sess-redact");
+		const call = buildCallTool(makePi(["read"]), extCtx);
+		await call("read", { bytes: payload }, "sess-redact");
 		const deadline = Date.now() + 3000;
 		let hit: Record<string, unknown> | undefined;
 		while (Date.now() < deadline && !hit) {

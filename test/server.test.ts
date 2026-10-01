@@ -59,10 +59,6 @@ async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
 			port: 0,
 			host: "127.0.0.1",
 			token: TOKEN,
-			deny: [],
-			denyMCPTools: false,
-			fileRoot: "/tmp/a2a-bridge-test-files",
-			maxFileBytes: 1024 * 1024,
 		},
 		makeDeps(),
 	);

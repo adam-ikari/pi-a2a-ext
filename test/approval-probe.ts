@@ -49,7 +49,7 @@ symlinkSync(join(REPO, "extensions", "a2a-bridge.ts"), join(extDir, "a2a-bridge.
 const probe = Bun.serve({ port: 0, fetch: () => new Response() });
 const PORT = probe.port ?? 0;
 probe.stop(true);
-writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1", deny: [], denyMCPTools: false }, null, 2));
+writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1" }, null, 2));
 
 const realModels = join(process.env.HOME ?? "", ".omp", "agent", "models.yml");
 copyFileSync(realModels, join(agentDir, "models.yml"));

@@ -3,7 +3,7 @@
  * local omp + ~/.omp/agent/models.yml).
  * Boots omp with the a2a extension and asserts the review fixes against the
  * LIVE server: auth placement, mandatory session id, version negotiation,
- * deny/alias exposure gate, healed 0600 token, and the two-phase audit log.
+ * catalog exposure gate, healed 0600 token, and the two-phase audit log.
  * Prints "HARDEN OK" on success; exits 1 on any failure.
  */
 import { spawn } from "node:child_process";
@@ -55,7 +55,7 @@ probe.stop(true);
 
 // Seed config WITHOUT a token: the app must heal it (generate + persist + 0600)
 // while keeping our fixed port.
-writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1", deny: ["bash"], denyMCPTools: false }, null, 2));
+writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1" }, null, 2));
 
 const realModelsYml = join(process.env.HOME ?? "", ".omp", "agent", "models.yml");
 if (!existsSync(realModelsYml)) {
@@ -162,20 +162,21 @@ try {
 	r = await post([{ jsonrpc: "2.0", id: 9, method: "ping" }], AUTH);
 	check(r.status === 400, `batch -> 400 (got ${r.status})`);
 
-	// 7. Exposure: deny list + catalog intersection.
+	// 7. Exposure: the catalog is the host registry verbatim, and anything
+	// outside it is unreachable (aliases, guessed names).
 	r = await post({ jsonrpc: "2.0", id: 10, method: "tools/list" }, { ...AUTH, "mcp-session-id": sid1 });
 	const list = (await r.json()) as { result: { tools: Array<{ name: string }> } };
 	const names = list.result.tools.map((t) => t.name);
 	check(names.includes("read"), "tools/list contains read");
-	check(!names.includes("bash"), "denied tool absent from tools/list");
+	check(!names.some((n) => n.startsWith("a2a_file_")), "no bridge-owned tools in the catalog");
 	r = await post(
-		{ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "bash", arguments: { command: "id" } } },
+		{ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "definitely_not_a_tool", arguments: {} } },
 		{ ...AUTH, "mcp-session-id": sid1 },
 	);
 	let call = (await r.json()) as { result: { isError: boolean; content: Array<{ text?: string }> } };
 	check(
 		call.result.isError === true && (call.result.content[0]?.text ?? "").includes("not exposed"),
-		"denied tool call -> isError, not exposed",
+		"unregistered tool call -> isError, not exposed",
 	);
 	r = await post(
 		{ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "xd://read", arguments: {} } },
@@ -204,7 +205,11 @@ try {
 		return content.includes('"phase":"done","tool":"read"') ? content : null;
 	}, "audit done record for read");
 	check(audit.includes('"phase":"start","tool":"read"'), "audit start record for read");
-	check(audit.includes('"phase":"start","tool":"bash"'), "audit start record for denied bash probe");
+	// Rejected calls are audited too, with both phases.
+	check(
+		audit.includes('"phase":"start","tool":"definitely_not_a_tool"'),
+		"audit start record for the rejected unregistered-tool call",
+	);
 	const recs: Array<{ id?: string; phase?: string; sid?: string; tool?: string }> = [];
 	for (const l of audit.trim().split("\n")) {
 		try {

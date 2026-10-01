@@ -7,35 +7,7 @@ import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID 
 // instead of relying on the all-optional base declaration.
 import type {} from "@oh-my-pi/pi-coding-agent/tools/context";
 import { auditDone, auditStart } from "./audit.ts";
-import type { BridgeConfig } from "./config.ts";
-import { isDenied } from "./config.ts";
-import { FileOpError } from "./fileguard.ts";
-import type { BridgeTool } from "./filetools.ts";
 import type { McpContent, McpTool } from "./server.ts";
-
-/**
- * The bridge's own tools live in a reserved namespace. If a host tool ever
- * takes the same name, the host wins (its calls keep going through the host's
- * approval gate) and we warn once instead of silently shadowing.
- */
-function bridgeOnly(bridgeTools: BridgeTool[], hostNames: Set<string>, warn: (name: string) => void): BridgeTool[] {
-	return bridgeTools.filter((t) => {
-		if (hostNames.has(t.name)) {
-			warn(t.name);
-			return false;
-		}
-		return true;
-	});
-}
-
-function makeWarner(): (name: string) => void {
-	const seen = new Set<string>();
-	return (name) => {
-		if (seen.has(name)) return;
-		seen.add(name);
-		console.error(`[a2a-bridge] host tool '${name}' shadows the bridge's own tool of that name`);
-	};
-}
 
 /** Convert a ToolInfo schema to JSON Schema; fall back to raw parameters. */
 function toInputSchema(parameters: TSchema): Record<string, unknown> {
@@ -49,22 +21,23 @@ function toInputSchema(parameters: TSchema): Record<string, unknown> {
 }
 
 /**
- * Build the tools/list catalog. Re-fetches pi.getAllTools() on every call to
- * reflect dynamic tools; schema conversion is cached per `parameters` object
- * identity (WeakMap), so a tool that re-registers with a new schema object is
- * re-converted instead of serving a stale cached schema.
+ * Build the tools/list catalog: the host session's registry, verbatim.
+ *
+ * No filtering. `pi.getAllTools()` is the whole registered set, including
+ * `hidden` tools and tools the host currently has disabled for its own model —
+ * the bridge does not second-guess that. Execution goes through the host's own
+ * tools (see buildCallTool), so the host's permission model decides what
+ * actually happens to a call.
+ *
+ * Re-fetched on every call so dynamic tools show up; schema conversion is cached
+ * per `parameters` object identity (WeakMap), so a tool that re-registers with a
+ * new schema object is re-converted instead of serving a stale cached schema.
  */
-export function buildToolCatalog(
-	pi: ExtensionAPI,
-	cfg: BridgeConfig,
-	bridgeTools: BridgeTool[] = [],
-): () => Promise<McpTool[]> {
+export function buildToolCatalog(pi: ExtensionAPI): () => Promise<McpTool[]> {
 	const schemaCache = new WeakMap<object, Record<string, unknown>>();
-	const warn = makeWarner();
 	return async () => {
 		const out: McpTool[] = [];
 		for (const t of pi.getAllTools()) {
-			if (isDenied(cfg, t.name)) continue;
 			const params = t.parameters;
 			const key = typeof params === "object" && params !== null ? params : null;
 			let inputSchema = key ? schemaCache.get(key) : undefined;
@@ -74,37 +47,24 @@ export function buildToolCatalog(
 			}
 			out.push({ name: t.name, description: t.description ?? "", inputSchema });
 		}
-		for (const t of bridgeOnly(bridgeTools, new Set(out.map((x) => x.name)), warn)) {
-			if (isDenied(cfg, t.name)) continue;
-			out.push({ name: t.name, description: t.description, inputSchema: t.inputSchema });
-		}
 		return out;
 	};
 }
 
 /**
- * Build the tools/call executor.
+ * Build the tools/call executor: resolve the name against the same registry
+ * tools/list advertises, then hand it to the host's tool implementation.
  *
- * Exposure = intersection: the name must survive `deny` filtering AND appear
- * either in pi.getAllTools() (the same source tools/list advertises) or in the
- * bridge's own tool table. The host catalog is the full session registry —
- * including `hidden` tools and tools the host currently has disabled — but
- * nothing outside it is reachable, so aliases (e.g. `xd://bash`) and guessable
- * hidden names are rejected here. On a name collision the host wins: bridge
- * tools bypass the host's approval gate, so shadowing them must not be possible.
- *
- * Host execution resolves through the live Main session registry so the host's
- * built-in approval gate (ExtensionToolWrapper) governs write/exec calls;
- * rejections surface as isError results.
+ * Nothing outside the registry is reachable, so aliases (e.g. `xd://bash`) and
+ * names that are not registered are rejected. Host execution resolves through
+ * the live Main session so the host's built-in approval gate
+ * (ExtensionToolWrapper) governs write/exec calls; rejections surface as
+ * isError results.
  */
 export function buildCallTool(
 	pi: ExtensionAPI,
 	extCtx: ExtensionContext,
-	cfg: BridgeConfig,
-	bridgeTools: BridgeTool[] = [],
 ): (name: string, args: unknown, sid?: string | null) => Promise<{ content: McpContent[]; isError: boolean }> {
-	const warn = makeWarner();
-
 	const runHost = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
 		const ref = AgentRegistry.global().get(MAIN_AGENT_ID);
 		if (!ref?.session) {
@@ -163,49 +123,27 @@ export function buildCallTool(
 		}
 	};
 
-	const run = async (
-		name: string,
-		args: unknown,
-		sid: string | null,
-	): Promise<{ content: McpContent[]; isError: boolean }> => {
-		// One message for "denied" and "not in catalog": a caller holding the
-		// token learns nothing about which names exist behind the curtain.
-		const notExposed = `tool '${name}' is not exposed by this bridge`;
-		if (isDenied(cfg, name)) return { content: [{ type: "text", text: notExposed }], isError: true };
-		const hostNames = new Set(pi.getAllTools().map((t) => t.name));
-		if (hostNames.has(name)) return runHost(name, args);
-		const bridge = bridgeOnly(bridgeTools, hostNames, warn).find((t) => t.name === name);
-		if (!bridge) return { content: [{ type: "text", text: notExposed }], isError: true };
-		try {
-			return await bridge.execute(args, sid);
-		} catch (e) {
-			if (e instanceof FileOpError) {
-				return { content: [{ type: "text", text: `a2a_file_error ${e.code}: ${e.message}` }], isError: true };
-			}
-			return { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
+	const run = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
+		// One message for "not registered" and "not in catalog": a caller holding
+		// the token learns nothing about which names exist behind the curtain.
+		if (!pi.getAllTools().some((t) => t.name === name)) {
+			return { content: [{ type: "text", text: `tool '${name}' is not exposed by this bridge` }], isError: true };
 		}
+		return runHost(name, args);
 	};
 
 	return async (name, args, sid) => {
-		const bridge = bridgeTools.find((t) => t.name === name);
-		const audited =
-			bridge?.auditView && typeof args === "object" && args !== null
-				? bridge.auditView(args as Record<string, unknown>)
-				: args;
-		// Chunk lines would bury the log; the transfer is bracketed by
-		// start/end records that carry the path and final size.
-		const skip = bridge?.skipAudit?.(name, args) ?? false;
-		const id = randomUUID();
 		// Dispatch-time record: if the call never settles (host approval
 		// waiting for a UI that does not exist), the start line is the trace.
-		if (!skip) auditStart(id, sid ?? null, name, audited);
+		const id = randomUUID();
+		auditStart(id, sid ?? null, name, args);
 		let r: { content: McpContent[]; isError: boolean };
 		try {
-			r = await run(name, args, sid ?? null);
+			r = await run(name, args);
 		} catch (e) {
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
-		if (!skip) auditDone(id, sid ?? null, name, audited, r.isError);
+		auditDone(id, sid ?? null, name, args, r.isError);
 		return r;
 	};
 }
