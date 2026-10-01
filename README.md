@@ -2,7 +2,7 @@
 
 [简体中文](README_ZN.md)
 
-Turn a running omp into a Streamable HTTP MCP server: a remote omp calls the host session's live tools over the standard MCP protocol, and the host invokes no LLM API.
+With this extension, a running omp also exposes an MCP server endpoint. A remote omp pointed at it can call the tools in this session (read, bash, edit, …), running against this machine's real files and shell. The host does no model inference — it takes the request, runs the tool, returns the result — so no tokens are spent.
 
 ## How it works
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-把运行中的 omp 变成一个 Streamable HTTP MCP 服务器：远程 omp 通过标准 MCP 协议直接调用宿主当前会话的工具，宿主不调用任何 LLM API。
+装上这个扩展后，正在运行的 omp 就多了一个 MCP 服务器接口。另一台机器上的 omp 配上这个地址，就能调用这边会话里的工具（read、bash、edit 等），执行的就是本机的真实文件和 shell 环境。宿主不做模型推理，只负责收请求、跑工具、回结果，因此不消耗 token。
 
 ## 工作原理
 
