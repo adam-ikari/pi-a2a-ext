@@ -78,7 +78,6 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 - **无 `nextCursor`**：单页返回全量（宿主 omp 客户端的分页循环在缺省游标时正常终止）。
 - `inputSchema` 为 JSON Schema 2020-12（由宿主工具的 typebox schema 经 `toolWireSchema` 导出）。
 - 内容 = 宿主会话工具注册表全集（`pi.getAllTools()`），**原样透传不过滤**：含 `hidden` 工具，也含宿主当前对自己模型禁用的工具。桥不贡献任何自己的工具，也不解释权限——语义详见 README「安全与边界」。
-- 与宿主工具同名时**宿主优先**：桥的自带工具被摘掉，宿主 stderr 打一条告警（`a2a-bridge] host tool '...' shadows`）。
 - 请求可带 `params.cursor`，被忽略。
 
 ### `tools/call`

@@ -166,7 +166,7 @@ The bridge sets no `fileRoot`, no `deny` list, and does not interpret paths — 
 
 ## Devices
 
-The agent runs on a server, the device is plugged into your machine, and nothing crosses the USB in between. The host exposes devices in two shapes, and both pass through unchanged.
+The host exposes devices in two shapes, and both pass through unchanged.
 
 **Toolchains (`bash`).** `adb`, `idf.py`, serial tools and flashers are not omp tools — they are commands on this machine. `bash` is in `tools/list`, so a remote client runs them directly:
 
@@ -177,7 +177,7 @@ The agent runs on a server, the device is plugged into your machine, and nothing
 
 Execution lands in the local shell, so whatever is on `PATH` is reachable: with the Android SDK installed, `adb` is callable; with ESP-IDF installed, `idf.py flash` is. Port monitors and register pokes work the same way.
 
-**Mounted devices (`xd://`).** The host mounts some tools as virtual devices. **They are not in `tools/list`** — they are driven through the `path` argument of `read` / `write`:
+**Mounted devices (`xd://`).** The host mounts tools as virtual devices. **They are not in `tools/list`** — they are driven through the `path` argument of `read` / `write`:
 
 ```json
 { "name": "read",  "arguments": { "path": "xd://" } }                    // list mounted devices

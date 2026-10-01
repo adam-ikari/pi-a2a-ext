@@ -158,7 +158,7 @@ scp ./data.tar user@host:~/data.tar
 
 ## 设备
 
-Agent 跑在服务器上、设备插在本机——中间的 USB 没人能跨。设备在宿主那边有两种形态，桥都原样透传。
+设备在宿主那边有两种形态，桥都原样透传。
 
 **工具链（`bash`）**。`adb`、`idf.py`、串口工具、烧录器都不是 omp 的工具，是本机上的命令。`bash` 在 `tools/list` 里，于是远程直接跑：
 
@@ -169,7 +169,7 @@ Agent 跑在服务器上、设备插在本机——中间的 USB 没人能跨。
 
 执行落在本机的 shell，PATH 上有什么就有什么——装了 Android SDK 就调得到 adb，ESP-IDF 装了就能 `idf.py flash`。端口监视、寄存器读写同理。
 
-**挂载设备（`xd://`）**。宿主把一些工具挂成虚拟设备，**它们不在 `tools/list` 里**，而是通过 `read` / `write` 的 `path` 参数驱动：
+**挂载设备（`xd://`）**。宿主把工具挂成虚拟设备，**它们不在 `tools/list` 里**，而是通过 `read` / `write` 的 `path` 参数驱动：
 
 ```json
 { "name": "read",  "arguments": { "path": "xd://" } }              // 列出挂载的设备

@@ -70,7 +70,7 @@ layout: home
 hero:
   name: omp A2A Bridge
   text: 让远程的 agent 操作你本地的设备
-  tagline: Agent 跑在服务器上，设备插在你机器上——中间的 USB 没人能跨。扩展在宿主 session_start 时起一个 MCP 服务器（MCP 2025-11-25，Streamable HTTP，默认只绑 127.0.0.1）；远程 agent 配上 url 和 Bearer token，就能在这台机器上跑 adb、idf、串口工具，也能用宿主挂载的调试设备。执行全落在本地，宿主不做模型推理。
+  tagline: 扩展把本机跑着的这个 omp 开成一个 MCP 接口，远程 agent 指过来就能在这台机器上跑 adb、idf.py、串口工具。宿主不做模型推理——收请求、跑工具、回结果。
   actions:
     - theme: brand
       text: 接上远程 agent
@@ -81,23 +81,20 @@ hero:
 
 features:
   - title: 接上远程 agent
-    details: 装上扩展拿到 token，把远程客户端的 mcp.json 指过来。跨机走 SSH 端口转发，默认只绑回环。
+    details: 宿主首次启动时广播桥地址并生成 token，复制进远程客户端的 mcp.json 即连通。跨机走 SSH 端口转发。
     link: /intro
   - title: 远程能碰到什么
-    details: 宿主注册表里的工具原样透传——read/bash/edit…，于是 adb、idf、串口、烧录都能在本地跑；宿主挂载的 xd:// 设备（如 DAP 调试器）也能用。
+    details: 宿主注册表原样透传，bash 在其中——adb、idf.py、烧录器都是本机上的命令。宿主挂载的设备同样能用。
     link: /intro#设备
   - title: 协议参考
-    details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。设备走 read/write 的 xd:// path，不是独立工具名。
+    details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 与 computer use 的区别
     details: 本桥按名字调工具，computer use 看屏幕猜坐标。省的是宿主的推理，不是调用方的上下文。
     link: /computer-use
   - title: 测试与核验
-    details: 单测之外，三个核验脚本起真实的宿主 omp 跑完整流程，另有一个核验发布包自包含。审批核验给出 VERDICT A/B/C。
+    details: 单测之外，三个核验脚本起真实的宿主 omp 跑完整流程，另一个核验发布包自包含。
     link: /testing
-  - title: 变更日志
-    details: 按日期分节的完整演进历史，含每次评审修复的来龙去脉。
-    link: /changelog
 ---
 `;
 writeFileSync(join(CONTENT, "index.md"), home);
