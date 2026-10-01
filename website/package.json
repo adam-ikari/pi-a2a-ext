@@ -4,7 +4,7 @@
 	"scripts": {
 		"sync": "node scripts/sync.mjs",
 		"start": "node scripts/sync.mjs && vitepress dev",
-		"build": "node scripts/sync.mjs && vitepress build",
+		"build": "node scripts/sync.mjs && vitepress build && node scripts/sitemap.mjs",
 		"preview": "vitepress preview"
 	},
 	"dependencies": {
