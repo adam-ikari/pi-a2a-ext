@@ -4,7 +4,15 @@
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with optional sandboxed bidirectional file transfer",
   "license": "MIT",
   "type": "module",
-  "keywords": ["pi-package", "pi", "oh-my-pi", "omp", "mcp", "a2a", "extension"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "oh-my-pi",
+    "omp",
+    "mcp",
+    "a2a",
+    "extension"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/adam-ikari/pi-a2a-ext.git"
@@ -14,15 +22,21 @@
     "url": "https://github.com/adam-ikari/pi-a2a-ext/issues"
   },
   "pi": {
-    "extensions": ["./extensions/a2a-bridge.ts"]
+    "extensions": [
+      "./extensions/a2a-bridge.ts"
+    ]
   },
-  "files": ["extensions/", "src/"],
+  "files": [
+    "extensions/",
+    "src/"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome check .",
     "test": "bun test",
     "test:smoke": "bun test/smoke.ts",
     "test:hardening": "bun test/hardening.ts",
+    "test:blob": "bun test/blob-probe.ts",
     "test:approval": "bun test/approval-probe.ts",
     "test:install": "bun test/install-probe.ts",
     "website": "cd website && bun run start"

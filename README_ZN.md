@@ -163,34 +163,25 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-远程 agent 要把固件、镜像这类二进制送到宿主机上烧写，唯一的路是 `tools/call`——桥只有一个端点，没有第二条通道。`scp` 在这里用不了：宿主默认只绑 `127.0.0.1`，云上的客户端连不进来。
+远程 agent 要把固件、镜像这类二进制放到宿主机上烧写，走 `POST /blob`——收原始字节，不用先 base64：
 
-**上传（远程 → 宿主）可行。** 走 `bash` 追加，每块 base64 编码后 `printf` 进去：
-
-```json
-{ "name": "bash", "arguments": { "command": "printf '%s' '<base64>' >> /tmp/fw.b64" } }
+```sh
+curl -X POST --data-binary @firmware.bin \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
 ```
 
-全部块拼完再 `base64 -d`。实测 16 MB 二进制，55 次请求、1.9 秒、字节一致；块大小用满上限（1020 KB）只要 21 次。烧固件够用。
+单次上限 1 MB（与 MCP 路径同一个 `maxRequestBodySize`），所以大镜像还是要分块——但每块是原始字节，比 base64 少传 33%，两端也省掉编解码。不带 `offset` 就是追加，带上则必须等于当前文件大小，否则 409。完整约定见 [协议参考](docs/protocol.md)。
 
-单次能带多少取决于编码，两者都撞在同一个 1 MB 请求体上限（`src/server.ts` 的 `maxRequestBodySize`）上：
-
-| 编码 | 单次上限 | 16 MB 需要 |
-| --- | --- | --- |
-| base64（每字节 1.33 字符） | 1020 KB 字符 = 765 KB 原始 | 21 块 |
-| `\xNN` 转义（每字节 4 字符） | 200 KB 原始（800 KB 命令） | 80 块 |
-
-1030 KB base64 字符就是 413（`1 MB 减去 JSON 开销`）。纯文本文件直接用 `write` 工具更省，单次约 900 KB。
-
-**下载（宿主 → 远程）走不通。** 三处宿主侧的限制叠在一起，任一条单独都足以卡住：
+**下载走不通。** 三处宿主侧的限制叠在一起，任一条单独都足以卡住：
 
 - `read` 单行超 150 KB 直接拒绝，报 `exceeds 150.0KB limit`；1 MB 的多行文件只回来约 16 KB
 - `bash` 输出超 768 字节就截断，尾巴指向 `artifact://N`
 - `read artifact://N` 自己也截断在约 150 KB
 
-所以远程 agent 拿不回本机的大文件，只能读小片段（实测 20 段 `dd` 累计约 3.2 MB / 4 MB，有缺口）。真要把下载打通，得让桥不经宿主工具直接读文件——那是另一种设计，桥会开始解释路径，下面「安全与边界」那套就不再成立。
+所以远程 agent 拿不回本机的大文件，只能读小片段（实测 20 段 `dd` 累计约 3.2 MB / 4 MB，有缺口）。`/blob` 只解决上传。
 
-路径怎么解释、允不允许，见「安全与边界」。
+纯文本或小文件直接用 `write` 工具（单次约 900 KB）更省事，只是不走 `/blob` 的路径。
 
 ## 设备
 
@@ -223,6 +214,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 - **桥不做权限决定**：`tools/list` 就是宿主会话的注册表（`pi.getAllTools()`），原样透传，不过滤。因此它包含 `hidden` 工具、也包含宿主当前对自己模型禁用的工具——**omp 是什么权限，桥就是什么权限**。桥没有 `deny` 这类第二套名单：两份名单可以互相矛盾，而代码里没有定义谁优先。要收紧就配宿主自己的工具权限，桥不参与。
 - **执行走宿主原生工具**：`tools/call` 固定路由到宿主 `Main` 会话的 `getToolByName().execute()`，注入真实的 `session.settings` 与 `ExtensionContext ui`，所以宿主的审批门（`ExtensionToolWrapper`）照常生效，桥自己一套审批逻辑都没有。
 - **调用与列表同源**：`tools/call` 只接受出现在 `tools/list` 里的名字，别名（如 `xd://bash`）和未注册的名字一律拒绝，且不区分「被过滤」与「不存在」（不泄露名字是否存在）。
+- **`POST /blob` 是例外，它不经宿主审批门。** 它收原始字节（省掉 base64），直接落盘，桥自己解释路径——**能写宿主能写的任何路径，无根目录、无白名单**。这是刻意的取舍：扩展无法主动发起审批（`ExtensionAPI` 只有 `on("tool_approval_requested", …)`，那是宿主问、扩展答的方向），而唯一能过审批门的写入方式是发一次 `tools/call`，那正是 `/blob` 要避免的编码。审计照旧记 `tool: "blob:write"`，args 只有 `path`/`offset`/`bytes`，文件内容不进日志。详见 [协议参考](docs/protocol.md)。
 - 默认仅回环监听；真要对外暴露，防火墙自己负责。
 - **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
 - **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。**只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）；轮转恰逢中途时，配对的两条可能分处 `.1` 与当前文件。日志写失败不影响调用。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷。
@@ -268,6 +260,7 @@ bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check
 bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp）
+bun run test:blob      # POST /blob 原始字节上传，11 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```

@@ -6,13 +6,50 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 
 | 项 | 行为 |
 | --- | --- |
-| 端点 | 服务器不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`） |
+| 端点 | MCP 侧不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`）。唯一例外是 `/blob`，见「原始字节上传」 |
 | POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 1MB |
 | GET | `405` 空响应体（不实现 SSE 端点与流式推送） |
 | DELETE | 结束会话，见「会话生命周期」 |
 | 其他方法（PUT 等） | `405` |
 | 响应头 | 一律 `Content-Type: application/json`；`initialize` 额外返回 `mcp-session-id` |
 | CORS | 不发送（回环工具，非浏览器场景） |
+
+## 原始字节上传
+
+`POST /blob` 收原始字节，用来把固件、镜像这类二进制放上宿主机——`tools/call` 做不到，因为它只能传字符串，调用方得先 base64。
+
+```
+POST /blob?path=<p>[&offset=<n>]
+Content-Type: application/octet-stream
+Content-Length: <n>
+
+<原始字节>
+```
+
+| 查询参数 | 语义 |
+| --- | --- |
+| `path` | 必填。`~` 与 `~/x` 按宿主 HOME 展开，相对路径按宿主 agent 目录解析。**不设根目录，不设白名单** |
+| `offset` | 省略则追加到文件末尾；给出则必须等于当前文件大小，否则 409。不允许写进文件中部 |
+
+响应 `200` 带 `{written, offset, size, path}`。拒绝情形：
+
+| 状态 | 条件 |
+| --- | --- |
+| `401` | 无 Bearer token（与 MCP 路径同一个 token） |
+| `400` | 缺 `path`；body 为空；`offset` 非非负整数 |
+| `409` | `offset` 与当前文件大小不符 |
+| `413` | 请求体超过 1 MB（`maxRequestBodySize`，与 MCP 路径同一个上限） |
+
+每次写入在审计日志里留一条 `tool: "blob:write"` 的记录，args 只有 `path`/`offset`/`bytes`——**文件内容不进日志**。
+
+### 它放弃了什么
+
+这是这个端点存在的原因，也是它的代价，写在这里以免被当成疏漏：
+
+- **不经宿主审批门。** `tools/call` 的写入走宿主自己的 `write`，因此过审批（`ExtensionToolWrapper`）。这里直接落盘。`ExtensionAPI` 只有 `on("tool_approval_requested", …)`——那是宿主问、扩展答的方向，扩展无法自己发起审批；唯一的近似做法是发一次 `tools/call`，而那正是这个端点要避免的编码。
+- **桥自己解释路径。** 宿主有 `resolvePath()` / `expandPath()`，但那是宿主包的内部模块，`BridgeDeps` 里没有任何入口，依赖它们会在宿主移动文件时断掉。所以 `src/blob.ts` 自己实现 `~` 展开与相对/绝对判断——**代价是桥现在能写宿主能写的任何路径**。
+
+README「安全与边界」一节按这个前提写。
 
 ### 请求处理顺序
 

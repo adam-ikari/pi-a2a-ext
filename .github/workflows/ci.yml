@@ -76,6 +76,11 @@ jobs:
       # ~/.omp/plugins independently of HOME and no env var redirects it, so
       # that half of the probe runs against the real plugin directory — which is
       # why it works here at all.
+      # POST /blob writes bytes without passing the host approval gate, so it is
+      # worth its own probe: the byte-identity assertions and the refusals are what
+      # keep that door honest.
+      - name: test:blob — raw-byte upload over POST /blob
+        run: bun run test:blob
       - name: test:install — package self-containment and a real host over MCP
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)

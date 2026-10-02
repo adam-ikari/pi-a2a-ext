@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { authorize } from "./auth.ts";
+import { type BlobDeps, handleBlob } from "./blob.ts";
 import type { BridgeConfig } from "./config.ts";
 
 export type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -16,6 +17,8 @@ export interface BridgeDeps {
 	serverInfo(): { name: string; version: string };
 	/** Clock override for tests (session TTL / eviction). Defaults to Date.now. */
 	now?(): number;
+	/** Agent directory, for `~/` expansion on the blob path. */
+	agentDir?: string;
 }
 
 const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
@@ -72,6 +75,19 @@ export async function startServer(
 			// DELETE must not be able to terminate another client's session.
 			if (!authorize({ token: cfg.token }, req.headers)) {
 				return json(401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "unauthorized" } });
+			}
+
+			// Raw-byte upload. Same token, same port, its own route — checked after
+			// auth and before the JSON-RPC body is read, since the payload here is
+			// bytes rather than a message. See src/blob.ts for what this path gives
+			// up (the host approval gate) and why there is no alternative.
+			if (new URL(req.url).pathname === "/blob") {
+				const blobDeps: BlobDeps = {
+					sid: req.headers.get("mcp-session-id"),
+					agentDir: deps.agentDir,
+				};
+				const r = await handleBlob(req, new URL(req.url), blobDeps);
+				return r.body === undefined ? new Response(null, { status: r.status }) : json(r.status, r.body);
 			}
 
 			if (req.method === "DELETE") {

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFile, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
@@ -86,6 +86,42 @@ export function auditDone(
 ): void {
 	appendLine(
 		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "done", tool, isError, args: serializeArgs(args) })}\n`,
+		env,
+	);
+}
+
+/**
+ * One record per `POST /blob` write.
+ *
+ * A single line rather than a start/done pair: the write either completes or the
+ * request fails, and there is no approval prompt that could leave it hanging —
+ * the blob endpoint never waits on a UI (see src/blob.ts for why it cannot).
+ *
+ * `args` carries metadata only. The payload is the file's bytes and never
+ * appears here; `bytes` is the count. A failure is recorded with `error` set and
+ * `bytes: 0`, so an audit grep distinguishes "wrote 16 MB" from "tried and
+ * could not".
+ */
+export function auditBlob(
+	sid: string | null,
+	path: string,
+	offset: number,
+	bytes: number,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): void {
+	const args = { path, offset, bytes };
+	appendLine(
+		`${JSON.stringify({
+			ts: new Date().toISOString(),
+			id: randomUUID(),
+			sid,
+			phase: "done",
+			tool: "blob:write",
+			isError: error !== null,
+			args: serializeArgs(args),
+			...(error ? { error: error.slice(0, 200) } : {}),
+		})}\n`,
 		env,
 	);
 }

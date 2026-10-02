@@ -170,35 +170,22 @@ Remote calls reuse the host's approval gate (`ExtensionToolWrapper`) entirely an
 
 ## Moving files
 
-When a remote agent has to deliver a firmware image or another binary to the host
-to flash, `tools/call` is the only route — the bridge has one endpoint and no
-second channel. `scp` does not apply: the host binds `127.0.0.1` by default, so a
-client on a cloud box cannot reach it.
+To put a firmware image or another binary on the host, use `POST /blob` — it takes
+raw bytes, so there is no base64 step first:
 
-**Upload (remote → host) works.** Append through `bash`, base64-encoding each
-chunk:
-
-```json
-{ "name": "bash", "arguments": { "command": "printf '%s' '<base64>' >> /tmp/fw.b64" } }
+```sh
+curl -X POST --data-binary @firmware.bin \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
 ```
 
-Once every chunk is in, `base64 -d` the result. Measured: a 16 MB binary took 55
-requests and 1.9 s, byte-identical; at the full chunk size it takes 21. Enough
-for firmware.
+One request carries at most 1 MB — the same `maxRequestBodySize` as the MCP path — so
+a large image still chunks, but each chunk is raw bytes: 33% less on the wire and no
+encode/decode on either side. No `offset` means append; with `offset` it must equal
+the file's current size, or 409. The full contract is in
+[docs/protocol.md](docs/protocol.md).
 
-How much fits in one request depends on the encoding, and both hit the same 1 MB
-request-body cap (`maxRequestBodySize` in `src/server.ts`):
-
-| encoding | per request | for 16 MB |
-| --- | --- | --- |
-| base64 (1.33 chars/byte) | 1020 KB chars = 765 KB raw | 21 chunks |
-| `\xNN` escapes (4 chars/byte) | 200 KB raw (800 KB command) | 80 chunks |
-
-1030 KB of base64 chars is a 413 — that is the 1 MB minus JSON overhead. For plain
-text the `write` tool is cheaper, about 900 KB per call.
-
-**Download (host → remote) does not work.** Three host-side limits stack, and any
-one of them alone is enough:
+**Download does not work.** Three host-side limits stack, and any one alone is enough:
 
 - `read` refuses a single line over 150 KB (`exceeds 150.0KB limit`); a 1 MB
   multi-line file comes back as roughly 16 KB
@@ -206,12 +193,11 @@ one of them alone is enough:
 - `read artifact://N` is itself truncated at about 150 KB
 
 So a remote agent cannot pull a large file off the host, only read small slices
-(measured: 20 `dd` slices recovered about 3.2 MB of a 4 MB file). Making download
-work means letting the bridge read files directly instead of going through host
-tools — a different design, one where the bridge starts interpreting paths and the
-boundary described under "Security and boundaries" no longer holds.
+(measured: 20 `dd` slices recovered about 3.2 MB of a 4 MB file). `/blob` covers
+upload only.
 
-How paths are interpreted, and what is permitted, see "Security and boundaries".
+For plain text or small files the `write` tool is simpler — about 900 KB per call —
+though it does not use `/blob`'s path.
 
 ## Devices
 
@@ -244,6 +230,7 @@ The listing is decided by the host at runtime — it depends on which extensions
 - **The bridge makes no permission decision**: `tools/list` is the host session's registry (`pi.getAllTools()`), passed through verbatim with no filtering. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
 - **Execution goes through the host's native tools**: `tools/call` routes to `getToolByName().execute()` on the host's `Main` session with the real `session.settings` and `ExtensionContext ui` injected, so the host's approval gate (`ExtensionToolWrapper`) applies as usual. The bridge implements no approval logic of its own.
 - **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list`; aliases (such as `xd://bash`) and unregistered names are refused, and a refusal does not distinguish "filtered" from "nonexistent" (so it does not leak whether a name exists).
+- **`POST /blob` is the exception, and it does not pass the host approval gate.** It takes raw bytes (skipping base64) and writes them directly, resolving the path itself — so it can write **anywhere the host process can write, with no root and no allowlist**. That is deliberate: an extension cannot raise an approval request of its own (`ExtensionAPI` only offers `on("tool_approval_requested", …)`, which is the host asking and the extension answering), and the one way to write through the gate is a `tools/call` — the very encoding `/blob` exists to avoid. Auditing still happens, tagged `tool: "blob:write"` with `path`/`offset`/`bytes` in args and never the file contents. See [docs/protocol.md](docs/protocol.md).
 - Loopback-only by default; if you really do expose it, the firewall is your responsibility.
 - **Sessions are mandatory**: every message except `initialize` must carry `Mcp-Session-Id` (missing → 400, unknown or idle past 24h → 404). At most 64 sessions are tracked, with the least-recently-seen evicted beyond that; every hit refreshes the idle timer.
 - **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI); if rotation lands mid-call, the paired records can end up split across `.1` and the current file. Audit write failures never affect the call. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads.
@@ -289,6 +276,7 @@ bun run lint          # lint + format check (Biome; fix with bunx biome check --
 bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
+bun run test:blob      # POST /blob raw-byte upload, 11 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
