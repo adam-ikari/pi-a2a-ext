@@ -4,36 +4,25 @@
 
 The extension starts an MCP server endpoint on the host's `session_start` (MCP `2025-11-25`, Streamable HTTP, bound to `127.0.0.1` by default). A remote omp points its `mcp.json` at it and can then call the tools of the host's `Main` session (`read`/`bash`/`edit`…), running against the host's real files and shell. The host does no model inference — takes the request, runs the tool, returns the result, spends no tokens.
 
-## Relationship to `omp acp`
+## Which one to use
 
-The host ships `omp acp` — an ACP server over **stdio**. It is not the same thing
-as this bridge; the direction is reversed.
+The host ships `omp acp`: an editor (Zed, say) starts it, hands it a prompt, and it
+calls a model and does the work itself, streaming the result back to the editor.
+**If you want a local agent that works for you, use that.**
 
-`acp` exposes omp as **an agent that does the reasoning**: the methods are
-`session/new`, `session/prompt`, `session/update`, `terminal/*` and
-`elicitation/*`. `session/prompt` means "go do the work". `elicitation/*` runs the
-other way — omp asks the client for a decision (permission confirmation and the
-like). `terminal/*` hands the terminal to the client to render. **The client is a
-code editor, on the same machine, bound to the process.**
+This bridge does no work. What arrives is a tool name and arguments; the bridge
+hands them to the host and sends the result back unchanged — **the thinking happens
+on the caller's side.** So if what you want is "I reason, and I borrow this
+machine's hands", use this bridge.
 
-This bridge exposes **a set of tools**: two methods, `tools/list` and
-`tools/call`, no `session/prompt`, no reverse channel. The caller brings its own
-model and does its own reasoning, borrowing only the host's tools. So "the host
-does no model inference" is not a shortcut, it is what defines the shape. The
-`tool.execute()` in `src/bridge.ts` deliberately stays out of the host's message
-stream, so a remote call structurally cannot reach the host's LLM context.
+Neither substitutes for the other. `ssh host 'omp acp'` is no help either: what
+starts there is a different agent doing its own reasoning, not your model.
 
 | | `omp acp` | this bridge |
 | --- | --- | --- |
-| callee | omp, reasons | a toolset, does not |
-| who reasons | the callee | the caller |
+| who reasons | omp | the caller |
 | transport | stdio | Streamable HTTP + Bearer |
-| client | a code editor | any MCP HTTP client |
-
-**If you want a working local agent, use `omp acp`.** If you want "I reason, and
-I borrow this machine's hands", use this bridge — the host exposes no second
-interface of that shape, so `ssh host 'omp acp'` is not a substitute: that moves a
-reasoning agent over there, it does not lend you its tools.
+| who connects | a code editor | any MCP client |
 
 ## How it works
 

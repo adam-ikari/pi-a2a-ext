@@ -4,22 +4,22 @@
 
 这个扩展在宿主 `session_start` 时起一个 MCP 服务器接口（MCP `2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`）。远程 omp 的 `mcp.json` 指向它，即可调用宿主 `Main` 会话里的工具（`read`/`bash`/`edit`…），执行落在宿主真实的文件与 shell 上。宿主不做模型推理——收请求、跑工具、回结果，不消耗 token。
 
-## 与 `omp acp` 的分工
+## 什么时候用哪个
 
-宿主自带 `omp acp`——一个 **stdio** 上的 ACP server。它和本桥不是一回事，方向是反的。
+宿主自带 `omp acp`：编辑器（比如 Zed）启动它，把提示词交给它，它自己调模型、自己干活，
+结果流回编辑器显示。**要一个能替你干活的本地 agent，用它。**
 
-`acp` 把 omp 暴露成**一个会推理的 agent**：方法是 `session/new`、`session/prompt`、`session/update`、`terminal/*`、`elicitation/*`。`session/prompt` 的意思就是「你去干活」；`elicitation/*` 是反方向的，omp 要向客户端提问要决策（权限确认之类）；`terminal/*` 把终端交给客户端渲染。**客户端是代码编辑器，同机，进程绑定。**
+本桥不干活。发过来的是工具名和参数，桥把它们交给宿主执行，再把结果原样送回——**推理发生在
+调用方。** 所以你要的如果是「我自己推理，只借你这台机器的手脚」，用本桥。
 
-本桥暴露的是**一组工具**：`tools/list` 与 `tools/call` 两个方法，没有 `session/prompt`，没有反向通道。调用方自己带模型、自己推理，只借宿主这台机器的工具——所以「宿主不做模型推理」不是省事，是这个形态的定义。`src/bridge.ts` 里那次 `tool.execute()` 刻意不碰宿主的 message stream，远程调用在结构上就无法进入宿主的 LLM 上下文。
+两者没法互相替代。`ssh host 'omp acp'` 也不行：那启动起来的是另一个会自己推理的
+agent，不是你手上那套模型。
 
 | | `omp acp` | 本桥 |
 | --- | --- | --- |
-| 被调方 | omp，会推理 | 工具集，不推理 |
-| 谁推理 | 被调方 | 调用方 |
-| transport | stdio | Streamable HTTP + Bearer |
-| 客户端 | 代码编辑器 | 任何 MCP HTTP 客户端 |
-
-**要一个能干活的本地 agent，用 `omp acp`。** 要「我自己推理，只借你这台机器的手脚」，用本桥——宿主没有第二个这种形态的对外接口，所以 `ssh host 'omp acp'` 替代不了它：那是把一个会推理的 agent 搬过去，不是把工具借过来。
+| 谁推理 | omp | 调用方 |
+| 传输 | stdio | Streamable HTTP + Bearer |
+| 谁连上来 | 代码编辑器 | 任何 MCP 客户端 |
 
 ## 工作原理
 
