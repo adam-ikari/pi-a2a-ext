@@ -241,9 +241,9 @@ bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposur
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
-bun run test:install  # published-package self-containment check, 17 items (npm pack + import graph; no host needed)
+bun run test:install  # package + install.sh for real + end-to-end, 32 items (runs `omp install .` and starts a host)
 ./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
-bun run website        # local docs site preview (Docusaurus) at http://localhost:3000; first run `cd website && bun install`
+bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
 
 What each test covers, the preconditions for the real-host checks, and how to read their verdicts (including the approval check's VERDICT A/B/C semantics) are in [docs/testing.md](docs/testing.md).

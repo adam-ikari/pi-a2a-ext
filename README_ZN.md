@@ -238,9 +238,9 @@ bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
-bun run test:install  # 发布包自包含核验，17 项（npm pack + import 图，无需宿主）
+bun run test:install  # 发布包 + install.sh 实装 + 端到端，32 项（会自己 omp install . 并起宿主）
 ./scripts/install.sh # 安装扩展到 ~/.omp/agent/extensions（--status / --uninstall）
-bun run website        # 文档站（Docusaurus）本地预览 http://localhost:3000；首次先 cd website && bun install
+bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```
 
 各测试的覆盖面、真实宿主核验的前置条件与判读标准（含审批核验 VERDICT A/B/C 语义）见 [docs/testing.md](docs/testing.md)。
