@@ -25,7 +25,7 @@
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
 | 内容 | 8 | 入口 `extensions/a2a-bridge.ts` 与 5 个 `src/*.ts` 都在 tarball 里；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块） |
-| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 21 项且无 `a2a_*`；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
+| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
@@ -58,6 +58,23 @@
 安装由 omp 保证，不在这个核验的范围内。
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
+
+## `test:blob` — 原始字节上传核验（19 项）
+
+**核验 `POST /blob` 能把字节原样放到宿主机上，且每种拒绝都成立。**
+
+字节比对是重点，不是状态码。`200` 不证明字节到了，`size` 对也不证明内容对——第一版探针只断言 `size === 1_500_000`，内容错了照样绿。现在每处写入都用 `Buffer.equals` 比对。写入内容是 0x00–0xff 全覆盖，任何一次意外的字符串往返（UTF-8 编解码）都会立刻现形。
+
+| 组 | 项数 | 断言 |
+| --- | --- | --- |
+| 字节一致 | 4 | 768 KB 无编码字节一致；**100 MB 一次请求字节一致**；3 块 500 KB 追加字节一致；129 MB → 413 |
+| 拒绝 | 5 | 无 token → 401；缺 `path` → 400；空 body → 400；`offset` 与现大小不符 → 409；`offset` 非整数 → 400 |
+| 仅 POST | 7 | `GET`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS /blob` 各 → 405；文件既没被读回也没被删掉 |
+| 其他 | 3 | 父目录不存在时自动创建；审计写入 `blob:write`；审计不含文件内容 |
+
+「仅 POST」那组是补的。接 `/blob` 进 handler 时只测了 POST，其他动词落到哪个分支没人验——于是 `DELETE /blob` 落进了 blob 的处理流程，因为 body 为空返回 400，那个状态码在说谎（读起来像「上传格式不对」，实际是「这个端点没这个方法」）。**接一个新路由时，「哪些方法会落到这里」和「这个路由做什么」是同一个问题的两面。**
+
+100 MB 那条是会抓到旧的 1 MB `maxRequestBodySize` 的那条——它红了才算数。
 
 ## `test:hardening` — 加固核验（29 项）
 
