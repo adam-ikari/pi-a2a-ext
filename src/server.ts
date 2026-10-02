@@ -21,6 +21,22 @@ export interface BridgeDeps {
 	agentDir?: string;
 }
 
+/**
+ * Ceiling on one request body, both for JSON-RPC and for `POST /blob`.
+ *
+ * It was 1 MB, which is fine for MCP messages but not for `POST /blob`: a
+ * firmware image is tens of megabytes, and at 1 MB a 100 MB upload is ~105
+ * round-trips. Bun buffers a body up to this limit before the handler sees it,
+ * so the cost is memory *per in-flight request*, not a preallocation — 128 MB is
+ * the ceiling for the largest image this is meant to carry, not a target. A
+ * caller wanting more should chunk; `/blob` appends at EOF, so chunking is one
+ * loop.
+ *
+ * Measured: Bun accepts `maxRequestBodySize` well past 1 MB (checked at 16, 128
+ * and 256 MB — bodies just under each cap arrived intact).
+ */
+const MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+
 const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 1 day idle expiry
 /** Upper bound on tracked sessions; the least-recently-seen entry is evicted first. */
@@ -203,7 +219,7 @@ export async function startServer(
 		return Bun.serve({
 			hostname: cfg.host,
 			port,
-			maxRequestBodySize: 1024 * 1024,
+			maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
 			fetch: handler,
 		});
 	}

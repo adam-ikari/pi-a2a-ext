@@ -179,11 +179,14 @@ curl -X POST --data-binary @firmware.bin \
   "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
 ```
 
-One request carries at most 1 MB — the same `maxRequestBodySize` as the MCP path — so
-a large image still chunks, but each chunk is raw bytes: 33% less on the wire and no
-encode/decode on either side. No `offset` means append; with `offset` it must equal
-the file's current size, or 409. The full contract is in
-[docs/protocol.md](docs/protocol.md).
+One request carries up to 128 MB — measured: a 100 MB image went through in a single
+call, byte-identical, in 0.4 s. No `offset` means append; with `offset` it must equal
+the file's current size, or 409. Larger files chunk, still as raw bytes. The full
+contract is in [docs/protocol.md](docs/protocol.md).
+
+Mind the memory: Bun buffers the body before the handler sees it, so the cost is
+**per in-flight request**. Measured host RSS: 368 MB idle, 624 MB after one 100 MB
+upload, 846 MB with two concurrent. Keep concurrency down.
 
 **Download does not work.** Three host-side limits stack, and any one alone is enough:
 
@@ -276,7 +279,7 @@ bun run lint          # lint + format check (Biome; fix with bunx biome check --
 bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
-bun run test:blob      # POST /blob raw-byte upload, 11 items (needs a local omp)
+bun run test:blob      # POST /blob raw-byte upload, 12 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```

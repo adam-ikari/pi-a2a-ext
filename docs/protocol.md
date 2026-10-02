@@ -7,7 +7,7 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 | 项 | 行为 |
 | --- | --- |
 | 端点 | MCP 侧不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`）。唯一例外是 `/blob`，见「原始字节上传」 |
-| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 1MB |
+| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 128MB（`maxRequestBodySize`，`/blob` 与 MCP 路径共用） |
 | GET | `405` 空响应体（不实现 SSE 端点与流式推送） |
 | DELETE | 结束会话，见「会话生命周期」 |
 | 其他方法（PUT 等） | `405` |
@@ -38,9 +38,21 @@ Content-Length: <n>
 | `401` | 无 Bearer token（与 MCP 路径同一个 token） |
 | `400` | 缺 `path`；body 为空；`offset` 非非负整数 |
 | `409` | `offset` 与当前文件大小不符 |
-| `413` | 请求体超过 1 MB（`maxRequestBodySize`，与 MCP 路径同一个上限） |
+| `413` | 请求体超过 128 MB（`maxRequestBodySize`，与 MCP 路径同一个上限） |
 
 每次写入在审计日志里留一条 `tool: "blob:write"` 的记录，args 只有 `path`/`offset`/`bytes`——**文件内容不进日志**。
+
+### 内存
+
+`maxRequestBodySize` 是 Bun 在 handler 之前缓冲的上限，所以代价是**每个在途请求**的内存，不是预分配。实测（宿主 RSS）：
+
+| | RSS |
+| --- | --- |
+| 空闲 | 368 MB |
+| 一次 100 MB 上传后 | 624 MB（+256 MB） |
+| 两次并发 100 MB 后 | 846 MB（+478 MB） |
+
+并发不是线性叠加——两次只比一次多约 222 MB，因为 body 会流式落盘而非全量驻留。但每个在途的大请求仍要吃掉 200 MB 以上，**别开十个并发**。要更大的文件就分块，`/blob` 追加到 EOF，分块是一个循环。
 
 ### 它放弃了什么
 

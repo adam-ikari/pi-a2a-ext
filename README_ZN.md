@@ -171,7 +171,9 @@ curl -X POST --data-binary @firmware.bin \
   "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
 ```
 
-单次上限 1 MB（与 MCP 路径同一个 `maxRequestBodySize`），所以大镜像还是要分块——但每块是原始字节，比 base64 少传 33%，两端也省掉编解码。不带 `offset` 就是追加，带上则必须等于当前文件大小，否则 409。完整约定见 [协议参考](docs/protocol.md)。
+单次上限 128 MB——实测 100 MB 的镜像一次请求就传完，字节一致，0.4 秒。不带 `offset` 就是追加，带上则必须等于当前文件大小，否则 409。更大的文件分块传，每块也是原始字节。完整约定见 [协议参考](docs/protocol.md)。
+
+注意内存：请求体在到达 handler 之前由 Bun 缓冲，所以代价是**每个在途请求**的内存。实测宿主 RSS 空闲 368 MB、一次 100 MB 上传后 624 MB、两次并发后 846 MB。并发上传要限量。
 
 **下载走不通。** 三处宿主侧的限制叠在一起，任一条单独都足以卡住：
 
@@ -260,7 +262,7 @@ bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check
 bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp）
-bun run test:blob      # POST /blob 原始字节上传，11 项（需本机 omp）
+bun run test:blob      # POST /blob 原始字节上传，12 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```

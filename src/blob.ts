@@ -5,9 +5,9 @@
  *
  * `tools/call` cannot carry raw binary. The host's `write` tool takes a string,
  * and its `bash` tool takes a command, so a caller has to base64 the payload
- * first. That costs 33% size and — because `maxRequestBodySize` caps one request
- * at 1 MB — it also forces chunking: a 16 MB firmware image measured 21 requests
- * at the maximum chunk size. This endpoint takes the bytes as they are.
+ * first. That costs 33% size, and at a 1 MB body limit it also forces chunking. This
+ * endpoint takes the bytes as they are; the body limit now stands at 128 MB, so a
+ * 100 MB image is one request.
  *
  * ## What this gives up, and why that is a decision rather than an oversight
  *
@@ -54,10 +54,6 @@ export interface BlobDeps {
 	 * what a relative path means to the host's own tools. */
 	agentDir?: string;
 }
-
-/** Per-request ceiling. The HTTP body limit already caps this; stated so the
- * error names a number rather than "too large". */
-const MAX_CHUNK = 1024 * 1024;
 
 export interface BlobResult {
 	status: number;
@@ -117,9 +113,9 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 
 	const buf = Buffer.from(await req.arrayBuffer());
 	if (buf.length === 0) return { status: 400, body: { error: "empty body" } };
-	if (buf.length > MAX_CHUNK) {
-		return { status: 413, body: { error: `chunk of ${buf.length} bytes exceeds ${MAX_CHUNK}` } };
-	}
+	// No size check here: `maxRequestBodySize` on Bun.serve already refused
+	// anything larger, with a 413, before this handler ran. A second limit would
+	// only risk the two disagreeing about where the boundary is.
 
 	// Parent directories are created for the caller: a firmware upload should not
 	// have to guess whether ~/flash/ exists. Failure here is not fatal — the open

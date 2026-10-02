@@ -26,7 +26,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -98,9 +98,29 @@ try {
 		`http=${r1.status}`,
 	);
 
-	// The server-side ceiling is a 413, not a silent truncation.
-	const rBig = await post(`?path=${encodeURIComponent(at("big.bin"))}`, Buffer.alloc(1024 * 1024 + 1024, 0x41));
-	check("a body over maxRequestBodySize is refused with 413", rBig.status === 413, `http=${rBig.status}`);
+	// The single-request path is the one that matters for firmware: a 100 MB
+	// image in one call, byte-identical. This is the assertion that would have
+	// caught the old 1 MB cap.
+	const hundred = Buffer.alloc(100 * 1024 * 1024);
+	for (let i = 0; i < hundred.length; i += 4096)
+		hundred.fill((i / (1024 * 1024)) & 0xff, i, Math.min(i + 4096, hundred.length));
+	const tBig = at("hundred.bin");
+	const t0 = Date.now();
+	const rBig = await post(`?path=${encodeURIComponent(tBig)}`, hundred);
+	check(
+		"a 100 MB image arrives in ONE request, byte-identical",
+		rBig.status === 200 &&
+			existsSync(tBig) &&
+			statSync(tBig).size === hundred.length &&
+			readFileSync(tBig).equals(hundred),
+		`http=${rBig.status} size=${existsSync(tBig) ? statSync(tBig).size : "none"}`,
+	);
+	console.log(`      (100 MB in ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+
+	// And the ceiling is a clean 413, not a truncated file.
+	const rOver = await post(`?path=${encodeURIComponent(at("over.bin"))}`, Buffer.alloc(129 * 1024 * 1024, 0x41));
+	check("a body over maxRequestBodySize is refused with 413", rOver.status === 413, `http=${rOver.status}`);
+	unlinkSync(tBig);
 
 	// Chunked upload at EOF, each chunk raw.
 	const t2 = at("chunked.bin");
