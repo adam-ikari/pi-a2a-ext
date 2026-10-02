@@ -43,7 +43,7 @@
  *                     names what was actually checked (default: origin git URL)
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -173,25 +173,45 @@ const e2eAgent = join(e2eHome, ".omp", "agent");
 const e2eNote = seedModels(e2eAgent);
 console.log(`  ${e2eNote}`);
 
-// Install through the host's own installer rather than requiring a human to
-// have done it. This probe is about the install path, so having it assume the
-// install already happened would skip the step most likely to break — and it
-// would make the probe fail on any fresh checkout, CI included.
+// Reinstall every run, unconditionally. An earlier version skipped the install
+// when something was already present, and that was a real hole: `~/.omp/plugins`
+// holds a *copy* when installed from a git URL, so after editing the working tree
+// the probe went on to test the frozen copy and reported PACKAGE OK. Demonstrated
+// by breaking src/bridge.ts in the tree — the probe stayed green, because it never
+// looked at the tree.
+//
+// `omp install .` is the spec, not the git URL, and the difference is the point:
+// it links the working tree, so the host loads whatever is there right now. The
+// README's git URL installs a copy of master, which cannot test uncommitted work.
+// A local install is a test fixture here, not a supported install method.
 const installedPlugin = join(homedir(), ".omp", "plugins", "node_modules", "pi-a2a-ext");
-let installNote = "already installed";
-if (!existsSync(installedPlugin)) {
-	try {
-		const out = execFileSync("omp", ["install", REPO], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-		installNote = out.trim().split("\n").pop() ?? "installed";
-	} catch (e) {
-		const err = String((e as { stderr?: string }).stderr ?? "");
-		check(false, "omp install links the extension", err.trim() || String(e));
-	}
+let installNote = "";
+try {
+	// Uninstall first: a leftover git-URL copy is a real directory, and install
+	// would treat it as already present.
+	execFileSync("omp", ["plugin", "uninstall", "pi-a2a-ext"], { stdio: "ignore" });
+} catch {
+	// Nothing installed is the normal case on a fresh machine.
+}
+try {
+	const out = execFileSync("omp", ["install", REPO], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	installNote = out.trim().split("\n").pop() ?? "installed";
+} catch (e) {
+	const err = String((e as { stderr?: string }).stderr ?? "");
+	check(false, "omp install links the extension", err.trim() || String(e));
 }
 check(
 	existsSync(installedPlugin),
 	"omp install puts pi-a2a-ext in the real plugin directory",
 	`looked for ${installedPlugin}; omp install said: ${installNote}`,
+);
+// The host loads whatever sits in that directory, so if it is not the working
+// tree the ten assertions below are about a stale copy. A link is the only shape
+// that guarantees that; a copy is frozen at install time.
+check(
+	realpathSync(installedPlugin) === realpathSync(REPO),
+	"the plugin directory points at this working tree, not a copy of it",
+	`${installedPlugin} -> ${realpathSync(installedPlugin)}`,
 );
 
 const host = spawn("omp", ["--mode", "rpc"], {

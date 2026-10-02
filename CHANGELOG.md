@@ -2,6 +2,13 @@
 
 本项目暂无 git 标签/发布版本，按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-02 — 端到端每次重装：原先验的是冻结的拷贝
+
+- fix: **`test:install` 端到端那组一直在验一份陈旧拷贝**。上一提交写的 `if (!existsSync(installedPlugin))` 表示「已装就跳过」，但 git URL 装出来的是**实体拷贝**（实测 `ls -ld` 确认非链接），冻结在装的那一刻。后果：改坏工作区的 `src/bridge.ts` 之后端到端全绿报 `PACKAGE OK`——它根本没看工作区。实测复现过
+- 改为每次先 `omp plugin uninstall` 再 `omp install .`。装法用 `.`（链接，指向工作区）而不是 README 那个 git URL（拷贝）：链接保证宿主加载的就是当前代码。README 仍只写 git URL 一条安装路径——**本地安装在这里是测试夹具，不是受支持的安装方式**
+- 新增一条断言：插件目录 `realpath` 必须等于仓库根，否则下面 11 项测的是拷贝不是工作区
+- test:install 27 → 28 项
+
 ## 2026-10-02 — 删掉 install.sh：安装只有 git URL 一条路
 
 - **删除 `scripts/install.sh`（约 130 行）**。上一提交刚修好它「每次实装都失败」的 bug（手写的 `src/*.ts` 必检清单在删 `filetools.ts`/`fileguard.ts` 时没跟着删），但修一个不该存在的东西比删掉它更费：它是 `omp install` 之外的第二条安装路径，自己维护了一份模块图校验。按「不重复造轮子」，安装由 omp 保证，桥不该再给第二条路
