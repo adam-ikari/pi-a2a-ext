@@ -279,7 +279,7 @@ bun run lint          # lint + format check (Biome; fix with bunx biome check --
 bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
-bun run test:blob      # POST /blob raw-byte upload, 12 items (needs a local omp)
+bun run test:blob      # POST /blob raw-byte upload, 19 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```

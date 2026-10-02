@@ -97,7 +97,12 @@ export async function startServer(
 			// auth and before the JSON-RPC body is read, since the payload here is
 			// bytes rather than a message. See src/blob.ts for what this path gives
 			// up (the host approval gate) and why there is no alternative.
-			if (new URL(req.url).pathname === "/blob") {
+			// POST only. Without the method check, `DELETE /blob` fell through to
+			// the handler and answered 400 "empty body" — a status that reads like a
+			// malformed upload rather than a method that does not exist here. The
+			// endpoint is upload-only by design, so say so with 405 like every other
+			// unsupported verb.
+			if (new URL(req.url).pathname === "/blob" && req.method === "POST") {
 				const blobDeps: BlobDeps = {
 					sid: req.headers.get("mcp-session-id"),
 					agentDir: deps.agentDir,
@@ -107,6 +112,12 @@ export async function startServer(
 			}
 
 			if (req.method === "DELETE") {
+				// `/blob` never accepts DELETE — a write endpoint has no business
+				// ending an MCP session, and answering 204 here would report a
+				// session teardown the caller never asked for.
+				if (new URL(req.url).pathname === "/blob") {
+					return json(405, { error: "/blob accepts POST only" });
+				}
 				const sid = req.headers.get("mcp-session-id");
 				if (sid) sessions.delete(sid);
 				return new Response(null, { status: 204 });

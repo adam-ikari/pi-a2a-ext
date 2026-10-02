@@ -39,6 +39,7 @@ Content-Length: <n>
 | `400` | 缺 `path`；body 为空；`offset` 非非负整数 |
 | `409` | `offset` 与当前文件大小不符 |
 | `413` | 请求体超过 128 MB（`maxRequestBodySize`，与 MCP 路径同一个上限） |
+| `405` | `/blob` 只接受 `POST`。`GET` 不会读回文件，`DELETE` 不会删文件——它不会误落进 MCP 的「结束会话」分支 |
 
 每次写入在审计日志里留一条 `tool: "blob:write"` 的记录，args 只有 `path`/`offset`/`bytes`——**文件内容不进日志**。
 

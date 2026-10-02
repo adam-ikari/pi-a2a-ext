@@ -262,7 +262,7 @@ bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check
 bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，29 项（需本机 omp）
-bun run test:blob      # POST /blob 原始字节上传，12 项（需本机 omp）
+bun run test:blob      # POST /blob 原始字节上传，19 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```

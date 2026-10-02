@@ -147,6 +147,22 @@ try {
 	check("offset that is not the current size → 409", mismatched.status === 409, `http=${mismatched.status}`);
 	check("non-integer offset → 400", (await post(`?path=${encodeURIComponent(t1)}&offset=abc`, "x")).status === 400);
 
+	// Upload-only. GET must not read the file back (it holds whatever was just
+	// written) and DELETE must not remove it — an earlier routing slip answered
+	// `DELETE /blob` with 400 "empty body", which reads like a malformed upload
+	// rather than a method this endpoint does not have.
+	const spy = at("spy.bin");
+	await post(`?path=${encodeURIComponent(spy)}`, "still-here");
+	for (const method of ["GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+		const r = await fetch(`${base}/blob?path=${encodeURIComponent(spy)}`, {
+			method,
+			headers: { authorization: `Bearer ${token}`, "mcp-session-id": SID },
+		});
+		check(`${method} /blob → 405`, r.status === 405, `http=${r.status}`);
+	}
+	check("nothing read it back or deleted it", readFileSync(spy, "utf8") === "still-here");
+	unlinkSync(spy);
+
 	// A firmware upload should not have to guess whether ~/flash exists.
 	const deep = at("nested/dir/fw.bin");
 	const rDeep = await post(`?path=${encodeURIComponent(deep)}`, "deep");
