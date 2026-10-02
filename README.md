@@ -59,12 +59,11 @@ instead of fetching — handy while developing. The `pi.extensions` field in
 tarball fails with `ENOTDIR`. A GitHub `owner/repo` shorthand is rejected as an
 invalid package name; use the full `https://….git` URL.
 
-All of the above was measured. **But the end-to-end path — `omp install <git-url>`
-on a clean machine, host startup, MCP handshake — has no automated check**: the
-host resolves its plugin directory independently of `HOME`, so the probe that
-simulated a fresh machine was really re-testing the stale install in the real
-`~/.omp`. `bun run test:install` now covers only whether the published package is
-self-contained (manifest, `files[]`, the entry's relative-import graph). See
+All of the above was measured, and `bun run test:install` checks the package, runs
+`install.sh` for real, then starts a host and drives the bridge over MCP as a remote
+client. One thing it cannot do is pretend the machine is clean: the host resolves
+`~/.omp/plugins` independently of `HOME`, and no env var redirects it — so that half
+runs against the real plugin directory an `omp install` writes to. See
 [docs/testing.md](docs/testing.md).
 
 If you would rather bypass the plugin manager, `./scripts/install.sh` symlinks

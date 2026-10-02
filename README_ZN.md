@@ -59,7 +59,11 @@ omp plugin uninstall pi-a2a-ext
 `ENOTDIR`；GitHub 的 `owner/repo` 简写会被当作非法包名拒绝，要用完整的
 `https://….git` URL。
 
-上面这些是实测过的。**但 `omp install <git-url>` 的端到端（真机装 → 起宿主 → MCP 握手）目前没有自动化核验**——宿主解析插件目录不受 `HOME` 隔离影响，模拟新机器的探针一直在验真实环境里那份旧安装。`bun run test:install` 现在只核验发布包自身是否自包含（manifest、`files[]`、入口的相对 import 图）。见 [docs/testing.md](docs/testing.md)。
+上面这些是实测过的，`bun run test:install` 也覆盖：核验发布包、真跑一遍
+`install.sh`，再起一个宿主、以远程客户端身份把桥的 MCP 面走完。做不到的是假装
+机器是干净的——宿主解析 `~/.omp/plugins` 不受 `HOME` 影响，也没有环境变量能改道，
+所以端到端那半程跑的是 `omp install` 真实写入的那个插件目录。见
+[docs/testing.md](docs/testing.md)。
 
 若想绕开插件管理器，`./scripts/install.sh` 直接软链到 `~/.omp/agent/extensions/`，
 并额外校验软链可解析、以及从入口出发**逐层传递**的相对 import 都能解析到文件。它支持

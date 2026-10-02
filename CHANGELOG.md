@@ -2,6 +2,18 @@
 
 本项目暂无 git 标签/发布版本，按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-02 — 端到端核验恢复；上一条「插件发现不受 HOME 影响」的结论被推翻
+
+- fix: **`test:install` 恢复端到端**（17 → 32 项）。上一条把端到端判为「无法自动化」并写进了 README 与 docs，那个判断来自一次坏探针。实测两个目录的行为不同：`~/.omp/agent/extensions/` **跟随** `HOME`（往临时 HOME 放一个只打印标记的扩展，标记出现），`~/.omp/plugins/` **不跟随**（桥仍从真实插件目录加载，`OMP_PLUGIN_DIR` / `OMP_PLUGINS_DIR` / `XDG_DATA_HOME` 都改不动）。坏探针只试了前者，且没给临时 HOME 写 `models.yml`
+- **宿主没有模型配置就不创建 session，扩展在 `session_start` 加载，于是桥永不广播**。这个症状与「插件发现忽略了我的 HOME」一模一样，单独吃过一次亏：临时 HOME 起宿主、桥没起来，一度又归因到隔离。所有起宿主的核验统一走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可——桥只跑工具不推理）
+- 新增第五组端到端：宿主广播监听地址 → `initialize` → `tools/list`（21 项、无 `a2a_*`、设备名不作为工具名暴露）→ 远程 `tools/call` 在本机执行并回结果 → `tools/call` 设备名被拒 → 无 token 得 401。**已验过会失败**：把插件目录移走后，那一组如实变红。反证跑了两轮才收敛——第一轮的失败详情打印了整个 `available_commands_update` 帧，一行几千字符
+- fix: **`scripts/install.sh` 在完整 checkout 上必然失败**。第 94 行硬编码 7 个 `src/*.ts` 的必检清单，删 `filetools.ts`/`fileguard.ts` 时没跟着删，于是实装报 `incomplete checkout?`。手写清单是模块图的第二份真相，删模块时必然过期。改为脚本自己走**传递** import 图（裸标识符跳过——那是包名的事，不是「checkout 不完整」；路径归一交给 `realpath -m`）
+- test: 第四组跑 `install.sh` 本身：临时 `OMP_AGENT_DIR` 上实装、`--status`、`--uninstall`，外加**反证**——移走 `src/bridge.ts` 传递引入的 `audit.ts`，脚本必须以 `unresolvable relative import` 拒绝。反证特意用传递依赖而非入口直连项，否则只证明了脚本读了入口那一行。移走的文件在 `finally` 里复原，核验不留脏工作区
+- docs: 两版 README 与 `docs/testing.md` 里「端到端无自动化覆盖」的说法改掉，`docs/testing.md` 增一节把两个目录的实测行为与那条错误结论的来源写明
+- docs: 修四处删文件传输面时漏掉的失效描述——「首次启动生成配置、token 与文件沙箱」（实测生成的 `a2a-bridge.json` 只有 `host`/`port`/`token`）、`/a2a` 「显示沙箱根与大小上限」（它只输出地址、端口、token 前缀）、`A2A_BRIDGE_AUDIT` 注为「审计路径沙箱」（实为审计日志路径）
+
+> 上一条（2026-10-01）写的「宿主解析插件目录不受 `HOME` 影响，模拟新机器的探针一直在验真实环境里那份旧安装」——**方向对，机制错**。真实插件目录那份确实会被加载，但原因是探针没播种 `models.yml`，宿主压根没起 session，与目录隔离无关。原记录保留以说明这次误判是怎么发生的。
+
 ## 2026-10-01 — 首页与指南改写痛点：远程够不到本地设备
 
 - fix: **CI 的 `site` job 红了**（上一提交引入）。headless 浏览器在 runner 上静默返回空 DOM（`dom=0B`），三个页面全被判 FAIL——而真因是浏览器没跑起来，不是图坏了。核验新增**控制项**：先请求一个不存在的页面（此时服务 404.html），控制项也空就以退出码 2 报「harness 坏了，下面的结果不作数」；顺带让 404 走真实的 `404.html`（此前是纯文本 `not found`）。CI 侧改为装 playwright 的 chromium 并用 `CHROME` 指过去，不再赌镜像自带哪个浏览器

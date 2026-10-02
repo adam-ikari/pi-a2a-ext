@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-01T14:58:49"
+updated: "2026-10-01T23:58:33"
 ---
 
 <!-- compiled_truth -->
@@ -419,3 +419,9 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   summary: "test:install 缩小为「发布包自包含」核验（17 项，不再起宿主）。根因实测确认：宿主解析插件目录不受 HOME 影响——往假 HOME 装一个只打印标记的扩展，标记未出现而真实 ~/.omp 那份桥起来了；XDG_DATA_HOME / OMP_PLUGIN_DIR / 改 cwd 三者都无效。新核验只测能观测的边界：manifest + npm pack 产物 + 从入口走相对 import 图（files[] 漏模块会「装得上、加载时才炸」，逐个断言文件名会被新增模块绕过，走图才抓得到），并已验过它会失败。docs 与 README（中英）如实写明 omp install <git-url> 端到端无自动化覆盖。**教训二则：(1) 探针声称隔离某样东西时用「该物缺席」的反证测——这里的反证是装一个只打印标记的扩展；(2) 绕不开宿主的机制时，缩小到能观测的边界并写明缺口，比自己重建一层隔离更诚实——后者正是不重复造轮子的反面。**"
   source: "install 核验修正 2026-10-01"
   affects: [a2a-mcp-bridge]
+
+- time: 2026-10-01T23:58:33
+  kind: reversal
+  summary: "推翻本页 2026-10-01 两条 timeline 里的结论「宿主解析插件目录不受 HOME 影响，因此端到端无法自动化」。**方向对，机制错。** 实测：两个目录行为不同——~/.omp/agent/extensions/ 跟随 HOME（往临时 HOME 放只打印标记的扩展，标记出现），~/.omp/plugins/ 不跟随（桥仍从真实插件目录加载；OMP_PLUGIN_DIR / OMP_PLUGINS_DIR / XDG_DATA_HOME 都改不动）。坏探针只试了 agent 目录，且没给临时 HOME 写 models.yml。**真正的拦路虎是第二条：宿主没有模型配置就不创建 session，扩展在 session_start 加载，于是桥永不广播**——这个症状与「插件发现忽略了我的 HOME」完全一样，单独又误判过一次。test:install 已恢复端到端（17 → 32 项，第五组 9 项，已验过移走插件目录会红）。教训升级为三条：(1) 探针声称隔离某物时用「该物缺席」的反证测；(2) **同一个探针两次给出相反结论时，先查最平凡的前提**（这里是没有 models.yml），不要先怀疑被测系统；(3) 探针的失败详情要限长，否则一行几千字符的 frame 会把真正的错误行淹掉。"
+  source: "test:install 恢复端到端；上一条 Q 关于插件发现隔离的结论被推翻"
+  affects: [testing, tooling]

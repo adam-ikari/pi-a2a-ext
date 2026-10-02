@@ -1,5 +1,5 @@
 /**
- * Package self-containment probe.
+ * Package self-containment + install-path probe.
  *
  *   bun run test:install
  *
@@ -10,33 +10,44 @@
  * manifest carries a version and the `pi.extensions` load switch, the tarball
  * ships both halves the entry imports (`extensions/` + `src/`), every module
  * the entry pulls in is present, and none of them reaches for a dependency that
- * is not declared.
+ * is not declared. Then that `scripts/install.sh` actually installs, and that the
+ * bridge comes up and serves MCP from a real host.
  *
- * ## What it deliberately does NOT check
+ * ## On plugin discovery and HOME
  *
- * It does not start a host omp, and it does not drive the MCP endpoint. The
- * earlier version of this probe did, and it was verifying the wrong thing: the
- * host resolves its plugin directory independently of `HOME`, so a throwaway
- * HOME did not isolate plugin discovery — the host kept loading whatever was
- * installed in the *real* `~/.omp/plugins`, and every "fresh machine" assertion
- * was really re-testing that stale copy. `XDG_DATA_HOME`, `OMP_PLUGIN_DIR` and a
- * changed cwd were all tried and none of them redirect plugin discovery.
+ * An earlier version of this probe asserted the host's plugin directory is
+ * isolated by `HOME`, and that turned out to be half true. Measured:
  *
- * So this probe now stops at the boundary it can actually observe: the package.
- * Whether `omp install` from a git URL end-to-end on a clean machine still works
- * is **not covered by automation** — see docs/testing.md. Restoring that
- * coverage means understanding the host's plugin discovery first, which is its
- * own task; re-implementing an isolation layer on this side would be a second
- * opinion about someone else's directory layout.
+ *   ~/.omp/agent/extensions/   follows HOME  (a marker extension planted in a
+ *                                        temp HOME does load)
+ *   ~/.omp/plugins/            ignores HOME  (the bridge still loads from the
+ *                                        real one; OMP_PLUGIN_DIR,
+ *                                        OMP_PLUGINS_DIR and XDG_DATA_HOME do
+ *                                        not redirect it)
+ *
+ * So discovery is not redirectable by env var. The end-to-end half below
+ * therefore does not pretend to a clean machine: it drives the host over the
+ * real plugin directory, which is where an installed bridge actually lives, and
+ * asserts on what the bridge does rather than on which directory it came from.
+ *
+ * A second trap cost an hour and is worth writing down: **the host refuses to
+ * create a session without model configuration, and extensions load on
+ * `session_start` — so a temp HOME with no models.yml starts no session, loads no
+ * extension, and the bridge never announces itself.** That reads exactly like
+ * "plugin discovery ignored my HOME" and is not. Every host here is seeded via
+ * test/harness.ts. When a probe claims isolation or breakage, check the obvious
+ * precondition before believing it.
  *
  * Env:
  *   A2A_INSTALL_SPEC  the spec under test, reported in the output so a failure
  *                     names what was actually checked (default: origin git URL)
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+
+import { seedModels } from "./harness";
 
 const REPO = resolve(import.meta.dir, "..");
 const SPEC = process.env.A2A_INSTALL_SPEC ?? "https://github.com/adam-ikari/pi-a2a-ext.git";
@@ -210,6 +221,151 @@ if (transitive) {
 sh(["--uninstall"]);
 check(!existsSync(join(shAgent, "extensions", "a2a-bridge.ts")), "install.sh --uninstall removes the link", shAgent);
 rmSync(shHome, { recursive: true, force: true });
+
+// --- 5. the real host, over the real plugin directory -----------------------
+
+// This is the end-to-end that the previous version of this probe gave up on. It
+// is not skipped: the host is started, the bridge is discovered through the
+// plugin directory an `omp install` writes to, and the MCP surface is driven as
+// a remote client would drive it.
+//
+// What it does NOT claim: that plugin discovery was redirected. It was not, and
+// no env var does that (see the header). The assertions are about the bridge's
+// behaviour, which is the thing that can actually regress.
+const e2eHome = mkdtempSync(join(tmpdir(), "install-e2e-"));
+const e2eAgent = join(e2eHome, ".omp", "agent");
+const e2eNote = seedModels(e2eAgent);
+console.log(`  ${e2eNote}`);
+
+// Install through the host's own installer rather than requiring a human to
+// have done it. This probe is about the install path, so having it assume the
+// install already happened would skip the step most likely to break — and it
+// would make the probe fail on any fresh checkout, CI included.
+const installedPlugin = join(homedir(), ".omp", "plugins", "node_modules", "pi-a2a-ext");
+let installNote = "already installed";
+if (!existsSync(installedPlugin)) {
+	try {
+		const out = execFileSync("omp", ["install", REPO], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		installNote = out.trim().split("\n").pop() ?? "installed";
+	} catch (e) {
+		const err = String((e as { stderr?: string }).stderr ?? "");
+		check(false, "omp install links the extension", err.trim() || String(e));
+	}
+}
+check(
+	existsSync(installedPlugin),
+	"omp install puts pi-a2a-ext in the real plugin directory",
+	`looked for ${installedPlugin}; omp install said: ${installNote}`,
+);
+
+const host = spawn("omp", ["--mode", "rpc"], {
+	env: { ...process.env, HOME: e2eHome },
+	stdio: ["pipe", "pipe", "pipe"],
+});
+let hostOut = "";
+let hostErr = "";
+host.stdout.on("data", (d) => (hostOut += d));
+host.stderr.on("data", (d) => (hostErr += d));
+
+/** Only the fields these assertions read. Keeps a failed check's detail short. */
+type JsonRpcBody = {
+	result?: { protocolVersion?: string; tools?: { name: string }[]; content?: { text?: string }[]; isError?: boolean };
+};
+
+const rpc = async (method: string, params: unknown, sid?: string) => {
+	const r = await fetch(baseUrl, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			authorization: `Bearer ${e2eToken}`,
+			...(sid ? { "mcp-session-id": sid } : {}),
+		},
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+	});
+	return { body: (await r.json()) as JsonRpcBody, sid: r.headers.get("mcp-session-id") };
+};
+
+let baseUrl = "";
+let e2eToken = "";
+try {
+	const deadline = Date.now() + 90_000;
+	while (Date.now() < deadline && !hostOut.includes("A2A bridge listening")) {
+		host.stdin.write(""); // the host exits on EOF, so keep stdin open
+		await Bun.sleep(300);
+	}
+	const announced = hostOut.match(/A2A bridge listening on (http:\/\/127\.0\.0\.1:\d+\/)/);
+	check(
+		!!announced,
+		"the host announces the bridge (a session needs model config to exist at all)",
+		// Detail on failure: short lines that explain a missing announcement. The
+		// rpc frame log includes multi-KB command manifests that match nothing
+		// useful, so anything over 200 chars is dropped rather than printed.
+		[...`${hostOut}\n${hostErr}`.split("\n")]
+			.map((l) => l.trim())
+			.filter((l) => l.length > 0 && l.length < 200)
+			.filter((l) => /error|no model|not available|failed|refus|announc/i.test(l))
+			.slice(0, 3)
+			.join(" | ") || "no announcement and no short error line",
+	);
+	baseUrl = announced?.[1] ?? "";
+	const cfg = JSON.parse(readFileSync(join(e2eAgent, "a2a-bridge.json"), "utf8"));
+	e2eToken = cfg.token as string;
+	check(
+		Object.keys(cfg).sort().join(",") === "host,port,token",
+		"first start writes only host/port/token — no path sandbox fields",
+		JSON.stringify(cfg),
+	);
+
+	if (baseUrl && e2eToken) {
+		const init = await rpc("initialize", { protocolVersion: "2025-11-25" });
+		check(
+			init.body?.result?.protocolVersion === "2025-11-25",
+			"initialize returns the protocol version",
+			JSON.stringify(init.body).slice(0, 200),
+		);
+		const sid = init.sid ?? "";
+
+		const list = await rpc("tools/list", {}, sid);
+		const names: string[] = (list.body?.result?.tools ?? []).map((t: { name: string }) => t.name);
+		check(names.length > 0, "tools/list returns the host registry", `${names.length} tools`);
+		check(
+			!names.some((n) => n.startsWith("a2a_")),
+			"the bridge contributes no tools of its own",
+			names.filter((n) => n.startsWith("a2a_")).join(", "),
+		);
+		check(
+			!names.includes("xd://") && !names.some((n) => n.startsWith("xd://")),
+			"mounted devices are not exposed as tool names",
+			names.filter((n) => n.startsWith("xd://")).join(", "),
+		);
+
+		// The promise the README makes: a remote agent reaches a local toolchain.
+		const called = await rpc("tools/call", { name: "bash", arguments: { command: "echo bridge-e2e-ok" } }, sid);
+		const text = (called.body?.result?.content ?? []).map((c: { text?: string }) => c.text ?? "").join("\n");
+		check(
+			called.body?.result?.isError !== true && text.includes("bridge-e2e-ok"),
+			"a remote tools/call runs on the local machine and returns output",
+			JSON.stringify(called.body).slice(0, 200),
+		);
+
+		const dev = await rpc("tools/call", { name: "xd://debug", arguments: {} }, sid);
+		check(
+			dev.body?.result?.isError === true,
+			"tools/call on a device name is refused",
+			JSON.stringify(dev.body).slice(0, 160),
+		);
+
+		const noAuth = await fetch(baseUrl, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+		});
+		check(noAuth.status === 401, "an unauthenticated request is rejected", `got ${noAuth.status}`);
+	}
+} finally {
+	host.kill("SIGTERM");
+	rmSync(e2eHome, { recursive: true, force: true });
+}
 
 rmSync(stage, { recursive: true, force: true });
 

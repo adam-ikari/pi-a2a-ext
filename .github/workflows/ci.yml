@@ -71,7 +71,12 @@ jobs:
         run: bun run test:smoke
       - name: test:hardening — auth, sessions, audit
         run: bun run test:hardening
-      - name: test:install — published package self-containment
+      # This one installs for real: it runs `omp install .` itself, then starts a
+      # host and drives the bridge over MCP. Plugin discovery reads
+      # ~/.omp/plugins independently of HOME and no env var redirects it, so
+      # that half of the probe runs against the real plugin directory — which is
+      # why it works here at all.
+      - name: test:install — package, install.sh, and a real host over MCP
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)
         run: bun run test:approval

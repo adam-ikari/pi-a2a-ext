@@ -15,25 +15,36 @@
 
 三个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
-## `test:install` — 发布包自包含核验 + `install.sh` 实装核验（22 项）
+## `test:install` — 发布包自包含核验 + `install.sh` 实装核验 + 端到端（32 项）
 
-**核验发布的 tarball 装得上去、且装完就能加载。** 三组：
+**核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 五组：
 
 | 组 | 项数 | 断言 |
 | --- | --- | --- |
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
 | 内容 | 8 | 入口 `extensions/a2a-bridge.ts` 与 5 个 `src/*.ts` 都在 tarball 里；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块） |
+| `install.sh` | 6 | 临时 `OMP_AGENT_DIR` 上实装、`--status`、`--uninstall`；**反证**移走传递依赖后必须拒绝 |
+| 端到端 | 9 | `omp install .` 把扩展放进真实插件目录（核验自己跑，已装则复用）；桥被发现并广播监听地址；首次启动只写 `host`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 21 项且无 `a2a_*`；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
-**这一版不启动宿主、不碰 MCP 端点。** 上一版两样都做，但**验的是错的对象**：宿主解析插件目录不受 `HOME` 影响，临时 HOME 并未隔离插件发现——宿主继续加载真实 `~/.omp/plugins` 里那份，于是每一条「新机器」断言其实都在重测那份陈旧副本。`XDG_DATA_HOME`、`OMP_PLUGIN_DIR`、改 `cwd` 都试过，没有一个能改变插件发现。实测证据：往假 HOME 装一个只会打印标记的扩展，标记没出现，真实那份的桥却起来了。
+第四组补的是一个真漏洞：`install.sh` 原先手写一份 `src/*.ts` 清单并要求它们存在，删掉 `filetools.ts`/`fileguard.ts` 后那份清单没跟着删，于是**每次实装都在完整 checkout 上报 `incomplete checkout?` 失败**。手写清单是模块图的第二份真相，删模块时它必然过期。现在脚本自己走 import 图。反证特意用**传递依赖**（`src/bridge.ts` 引入的 `audit.ts`）而非入口直连项，否则只证明了脚本读了入口那一行。
 
-因此 **`omp install <git-url>` 的端到端（真机装 → 起宿主 → MCP 握手 → 文件往返）目前没有自动化覆盖**。恢复它要先搞清楚宿主的插件发现机制，那是独立任务；在这个核验里自己搭一层目录隔离，等于对别人的目录布局另立一套权威。
+## 插件发现与 HOME：实测结论
 
-第四组跑 `scripts/install.sh` 本身：在一个临时 `OMP_AGENT_DIR` 上实装、查状态、卸载，并**反证**——把 `src/bridge.ts` 传递引入的模块（`audit.ts`）移走，脚本必须以 `unresolvable relative import` 拒绝安装。反证用的是传递依赖而非入口直连项，否则只证明了脚本读了入口的 import 列表。
+早先这个核验断言「宿主解析插件目录不受 `HOME` 影响」，并据此放弃了端到端。**那条结论是错的，来源是一次坏探针。** 实测：
 
-这一组是补上的漏洞：`install.sh` 原先手写一份 `src/*.ts` 清单并要求它们存在，删掉 `filetools.ts`/`fileguard.ts` 后那份清单没跟着删，于是**每次实装都在完整 checkout 上报 `incomplete checkout?` 失败**。手写清单是模块图的第二份真相，删模块时它必然过期。现在脚本自己走 import 图，与本核验第三组同一个问题、同一个答案。
+| 目录 | 是否跟随 `HOME` | 证据 |
+| --- | --- | --- |
+| `~/.omp/agent/extensions/` | **跟随** | 往临时 HOME 放一个只打印标记的扩展，标记出现了 |
+| `~/.omp/plugins/` | **不跟随** | 桥仍从真实插件目录加载；`OMP_PLUGIN_DIR`、`OMP_PLUGINS_DIR`、`XDG_DATA_HOME` 都不能改道 |
+
+坏探针错在哪：它只往临时 HOME 的 agent 目录放标记，没往 plugins 目录放；而且**没给临时 HOME 写 `models.yml`**。
+
+第二点是关键，也单独吃过一次亏：**宿主没有模型配置就不创建 session，扩展在 `session_start` 加载，于是桥永远不广播**。这个症状与「插件发现忽略了我的 HOME」完全一样。写「桥没起来」的失败信息时，先看有没有这句 `No models available`。所有起宿主的核验都走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可，桥不推理）。
+
+所以端到端这组**不假装自己验证了干净机器**——插件发现确实无法用环境变量改道。它验的是桥的行为，而行为才是会回归的东西。插件目录那一项要求 `omp install .` 先跑过，缺了会指名告诉你要跑什么。
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
