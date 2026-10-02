@@ -76,7 +76,7 @@ jobs:
       # ~/.omp/plugins independently of HOME and no env var redirects it, so
       # that half of the probe runs against the real plugin directory — which is
       # why it works here at all.
-      - name: test:install — package, install.sh, and a real host over MCP
+      - name: test:install — package self-containment and a real host over MCP
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)
         run: bun run test:approval

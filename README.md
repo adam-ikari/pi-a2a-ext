@@ -51,32 +51,26 @@ That installs it into `~/.omp/plugins/node_modules/pi-a2a-ext`. To remove it:
 omp plugin uninstall pi-a2a-ext
 ```
 
-Already have a checkout? `omp install .` from the repo root links that copy
-instead of fetching — handy while developing. The `pi.extensions` field in
+**That is the only install path.** `omp install` itself also takes a directory and
+npm specs, but this extension does not offer a local install: what you install is
+the repository behind the git URL above. The `pi.extensions` field in
 `package.json` is what tells omp which entry file to load, so do not remove it.
 
-`omp install` takes a **directory or a git URL, not a `.tgz`** — pointing it at a
-tarball fails with `ENOTDIR`. A GitHub `owner/repo` shorthand is rejected as an
-invalid package name; use the full `https://….git` URL.
+The URL has to be the full `https://….git` — a GitHub `owner/repo` shorthand is
+rejected as an invalid package name, and pointing it at a `.tgz` fails with
+`ENOTDIR`.
 
-All of the above was measured, and `bun run test:install` checks the package, runs
-`install.sh` for real, then starts a host and drives the bridge over MCP as a remote
-client. One thing it cannot do is pretend the machine is clean: the host resolves
-`~/.omp/plugins` independently of `HOME`, and no env var redirects it — so that half
-runs against the real plugin directory an `omp install` writes to. See
+All of the above was measured, and `bun run test:install` checks the package, then
+starts a host and drives the bridge over MCP as a remote client. One thing it
+cannot do is pretend the machine is clean: the host resolves `~/.omp/plugins`
+independently of `HOME`, and no env var redirects it — so that half runs against
+the real plugin directory an `omp install` writes to. See
 [docs/testing.md](docs/testing.md).
 
-If you would rather bypass the plugin manager, `./scripts/install.sh` symlinks
-straight into `~/.omp/agent/extensions/` and additionally verifies that the link
-resolves and that every relative import reachable from the entry — transitively,
-not just the ones on its first line — resolves to a file. It takes
-`--status` (report state, non-zero if broken) and `--uninstall`; set
-`OMP_AGENT_DIR` to target somewhere other than `~/.omp/agent`.
-
-> Do not replace any of these with a bare
-> `ln -s "$PWD/extensions/a2a-bridge.ts" ...`. That one-liner only works when
-> `$PWD` happens to be the repo root; run it from anywhere else and it silently
-> links a path that does not exist, and the bridge simply never comes up.
+Nor hand-symlink into `~/.omp/agent/extensions/`:
+`ln -s "$PWD/extensions/a2a-bridge.ts" ...` only works when `$PWD` happens to be
+the repo root. Run it from anywhere else and it links a path that does not exist,
+the bridge never comes up, and the host says nothing about it.
 
 On first start the bridge generates its own config and token under
 `~/.omp/agent/`, so there is nothing else to set up per machine.
@@ -241,8 +235,6 @@ bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposur
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
-bun run test:install  # package + install.sh for real + end-to-end, 32 items (runs `omp install .` and starts a host)
-./scripts/install.sh   # install the extension into ~/.omp/agent/extensions (--status / --uninstall)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
 

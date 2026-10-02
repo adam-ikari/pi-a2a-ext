@@ -2,6 +2,16 @@
 
 本项目暂无 git 标签/发布版本，按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-02 — 删掉 install.sh：安装只有 git URL 一条路
+
+- **删除 `scripts/install.sh`（约 130 行）**。上一提交刚修好它「每次实装都失败」的 bug（手写的 `src/*.ts` 必检清单在删 `filetools.ts`/`fileguard.ts` 时没跟着删），但修一个不该存在的东西比删掉它更费：它是 `omp install` 之外的第二条安装路径，自己维护了一份模块图校验。按「不重复造轮子」，安装由 omp 保证，桥不该再给第二条路
+- **安装方式收敛为一条**：README（中英）删掉「仓库根执行 `omp install .` 链本地这份」与整段 install.sh 说明，改写为「**只有这一条安装路径**」。手工软链的警告保留但独立成段——那个坑还在（`ln -s "$PWD/..."` 换个目录就链到不存在的路径，桥静默不启动而宿主不报错），只是不再依附于被删的脚本
+- test:install 32 → 27 项，删掉测 install.sh 的整组（含那条「移走传递依赖必须拒绝」的反证）。随之清掉 `mkdirSync` / `realpathSync` / `renameSync` 三个未使用 import——biome 的 warning 不影响退出码，只看退出码会漏
+- docs/testing.md 与 ci.yml 的 step 名同步。顺带改准两处：矩阵表原说四个核验共用 `OMP_BIN`，实际 `test:install` 不认（它要跑的 `omp install` 与被装的东西必须是同一个）；「三个宿主核验」现在是四个
+- 项数实测 27（6 manifest + 3 打包 + 8 内容 + 10 端到端），不是沿用上一轮的 32
+
+> CHANGELOG 与 brain 里的 `install.sh` 记录保留原文——那个 bug 是真的，只是修它的选择错了。
+
 ## 2026-10-02 — 端到端核验恢复；上一条「插件发现不受 HOME 影响」的结论被推翻
 
 - fix: **`test:install` 恢复端到端**（17 → 32 项）。上一条把端到端判为「无法自动化」并写进了 README 与 docs，那个判断来自一次坏探针。实测两个目录的行为不同：`~/.omp/agent/extensions/` **跟随** `HOME`（往临时 HOME 放一个只打印标记的扩展，标记出现），`~/.omp/plugins/` **不跟随**（桥仍从真实插件目录加载，`OMP_PLUGIN_DIR` / `OMP_PLUGINS_DIR` / `XDG_DATA_HOME` 都改不动）。坏探针只试了前者，且没给临时 HOME 写 `models.yml`

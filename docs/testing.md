@@ -9,27 +9,24 @@
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:install` | 发布包 + `install.sh` 实装 + 端到端，32 项 | 是 | `PACKAGE OK` |
+| `bun run test:install` | 发布包自包含 + 端到端，27 项 | 是 | `PACKAGE OK` |
 
-统一前置（四个起宿主的核验）：PATH 上有 `omp`（或设 `OMP_BIN`）。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。前三个核验的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（四个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-三个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
+四个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
-## `test:install` — 发布包自包含核验 + `install.sh` 实装核验 + 端到端（32 项）
+## `test:install` — 发布包自包含核验 + 端到端（27 项）
 
-**核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 五组：
+**核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 四组：
 
 | 组 | 项数 | 断言 |
 | --- | --- | --- |
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
 | 内容 | 8 | 入口 `extensions/a2a-bridge.ts` 与 5 个 `src/*.ts` 都在 tarball 里；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块） |
-| `install.sh` | 6 | 临时 `OMP_AGENT_DIR` 上实装、`--status`、`--uninstall`；**反证**移走传递依赖后必须拒绝 |
-| 端到端 | 9 | `omp install .` 把扩展放进真实插件目录（核验自己跑，已装则复用）；桥被发现并广播监听地址；首次启动只写 `host`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 21 项且无 `a2a_*`；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
+| 端到端 | 10 | `omp install .` 把扩展放进真实插件目录（核验自己跑，已装则复用）；桥被发现并广播监听地址；首次启动只写 `host`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 21 项且无 `a2a_*`；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
-
-第四组补的是一个真漏洞：`install.sh` 原先手写一份 `src/*.ts` 清单并要求它们存在，删掉 `filetools.ts`/`fileguard.ts` 后那份清单没跟着删，于是**每次实装都在完整 checkout 上报 `incomplete checkout?` 失败**。手写清单是模块图的第二份真相，删模块时它必然过期。现在脚本自己走 import 图。反证特意用**传递依赖**（`src/bridge.ts` 引入的 `audit.ts`）而非入口直连项，否则只证明了脚本读了入口那一行。
 
 ## 插件发现与 HOME：实测结论
 
