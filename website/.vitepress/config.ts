@@ -143,43 +143,53 @@ export default defineConfig({
 	themeConfig: {
 		siteTitle: SITE_NAME,
 		logo: "/img/logo.svg",
-		nav: [
-			{ text: "首页", link: "/" },
-			{ text: "使用指南", link: "/intro" },
-			{ text: "协议参考", link: "/protocol" },
-			{ text: "与 computer use", link: "/computer-use" },
-			{ text: "测试与核验", link: "/testing" },
-			{ text: "变更日志", link: "/changelog" },
-		],
-		sidebar: {
-			"/": [
-				{ text: "使用指南", link: "/intro" },
-				{ text: "协议参考", link: "/protocol" },
-				{ text: "与 computer use 的区别", link: "/computer-use" },
-				{ text: "测试与核验", link: "/testing" },
-				{ text: "变更日志", link: "/changelog" },
-				{
-					text: "设计规格",
-					collapsed: true,
-					items: [
-						{
-							text: "A2A MCP Bridge 设计",
-							link: "/superpowers/specs/2026-09-10-a2a-mcp-bridge-design",
-						},
+		// DRAFT=1 ships one holding page (see scripts/sync.mjs). Nav and sidebar go
+		// empty with it, so the published site has no way into the docs that are
+		// not published. Without the env var both come back verbatim — that way
+		// "put the site back" is deleting one line, not reconstructing a config.
+		nav:
+			process.env.DRAFT === "1"
+				? []
+				: [
+						{ text: "首页", link: "/" },
+						{ text: "使用指南", link: "/intro" },
+						{ text: "协议参考", link: "/protocol" },
+						{ text: "与 computer use", link: "/computer-use" },
+						{ text: "测试与核验", link: "/testing" },
+						{ text: "变更日志", link: "/changelog" },
 					],
-				},
-				{
-					text: "实施计划",
-					collapsed: true,
-					items: [
-						{
-							text: "A2A MCP Bridge",
-							link: "/superpowers/plans/2026-09-10-a2a-mcp-bridge",
-						},
-					],
-				},
-			],
-		},
+		sidebar:
+			process.env.DRAFT === "1"
+				? {}
+				: {
+						"/": [
+							{ text: "使用指南", link: "/intro" },
+							{ text: "协议参考", link: "/protocol" },
+							{ text: "与 computer use 的区别", link: "/computer-use" },
+							{ text: "测试与核验", link: "/testing" },
+							{ text: "变更日志", link: "/changelog" },
+							{
+								text: "设计规格",
+								collapsed: true,
+								items: [
+									{
+										text: "A2A MCP Bridge 设计",
+										link: "/superpowers/specs/2026-09-10-a2a-mcp-bridge-design",
+									},
+								],
+							},
+							{
+								text: "实施计划",
+								collapsed: true,
+								items: [
+									{
+										text: "A2A MCP Bridge",
+										link: "/superpowers/plans/2026-09-10-a2a-mcp-bridge",
+									},
+								],
+							},
+						],
+					},
 		socialLinks: [{ icon: "github", link: "https://github.com/adam-ikari/pi-a2a-ext" }],
 		// The default theme's UI chrome ships in English; a zh-CN site that
 		// leaves these alone reads as half-finished (English "Search" box,
@@ -196,7 +206,10 @@ export default defineConfig({
 			title: "页面不存在",
 			// The default is an English Kerouac quote. State what happened
 			// instead of guessing at a cause the server cannot know.
-			quote: "这个地址下没有 .md 文件。站点只有 8 个页面，都列在左侧。",
+			quote:
+				process.env.DRAFT === "1"
+					? "站点正在重写，没有别的页面。"
+					: "这个地址下没有 .md 文件。站点只有 8 个页面，都列在左侧。",
 			linkText: "回到首页",
 			linkLabel: "回到首页",
 		},

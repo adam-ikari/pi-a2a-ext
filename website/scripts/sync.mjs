@@ -21,6 +21,34 @@ const CONTENT = join(SITE, "content");
 
 rmSync(CONTENT, { recursive: true, force: true });
 mkdirSync(CONTENT, { recursive: true });
+
+// DRAFT=1 publishes a single holding page instead of the site. The extension's
+// shape is still being decided, so the docs describe something that may change —
+// publishing them now would have readers build against a form that gets revised.
+// The repo's markdown stays the source of truth and untouched; only the built
+// site changes, and dropping the env var brings the whole site back.
+if (process.env.DRAFT === "1") {
+	cpSync(join(SITE, "public"), join(CONTENT, "public"), { recursive: true });
+	writeFileSync(
+		join(CONTENT, "index.md"),
+		`---
+layout: home
+hero:
+  name: omp A2A Bridge
+  text: 文档站正在重写
+  tagline: 扩展的形态还没定下来，现在发布出来的内容可能改掉。仓库里的 README 与 docs 是准绳，改完再上线。
+  actions:
+    - theme: alt
+      text: 看仓库
+      link: https://github.com/adam-ikari/pi-a2a-ext
+features: []
+---
+`,
+	);
+	process.stdout.write("sync: DRAFT=1 — 只出占位页，未发布正文\n");
+	process.exit(0);
+}
+
 cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 
 // README_ZN.md -> intro.md. The site is the Chinese one: README.md is the
