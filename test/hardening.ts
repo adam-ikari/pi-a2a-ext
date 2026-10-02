@@ -7,25 +7,15 @@
  * Prints "HARDEN OK" on success; exits 1 on any failure.
  */
 import { spawn } from "node:child_process";
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { seedModels } from "./harness.ts";
+import { linkExtension, seedModels } from "./harness.ts";
 
-const REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
+const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
 const tmp = mkdtempSync(join(tmpdir(), "a2a-harden-"));
 const agentDir = join(tmp, ".omp", "agent");
-const extDir = join(agentDir, "extensions");
+const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2a-bridge.json");
 const auditPath = join(agentDir, "a2a-bridge.log");
 const outLog = join(tmp, "omp.out.log");
@@ -44,8 +34,7 @@ function check(cond: unknown, label: string): void {
 	}
 }
 
-mkdirSync(extDir, { recursive: true });
-symlinkSync(join(REPO, "extensions", "a2a-bridge.ts"), join(extDir, "a2a-bridge.ts"));
+linkExtension(agentDir);
 writeFileSync(dataFile, payload);
 
 // Free port (probe-then-close, same approach as smoke.ts).

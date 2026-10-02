@@ -17,9 +17,9 @@
  * If you have a real models.yml and prefer it (e.g. to exercise against a real
  * host config), set A2A_PROBE_REAL_MODELS=1.
  */
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** Unreachable on purpose — see the note above. */
 const FAKE_MODELS_YML = `providers:
@@ -47,4 +47,25 @@ export function seedModels(agentDir: string): string {
 	}
 	writeFileSync(target, FAKE_MODELS_YML);
 	return "models.yml: placeholder provider (unreachable on purpose; the probes never call a model)";
+}
+
+/**
+ * Link the extension into `<agentDir>/extensions/` so a throwaway HOME's host
+ * actually loads it.
+ *
+ * This was open-coded in every probe, and `test:blob` shipped without it: it
+ * passed locally because `omp install .` had left a copy in the real plugin
+ * directory, and failed in CI, where nothing installs the extension. The symptom
+ * was "the host came up but the bridge never announced itself" — which reads like
+ * a bridge bug and is not one.
+ *
+ * Note the direction this proves: the host follows HOME for `~/.omp/agent/
+ * extensions/` but not for `~/.omp/plugins/`. A probe that relies on the real
+ * plugin directory tests whatever is installed there, not this checkout.
+ */
+export function linkExtension(agentDir: string): void {
+	const REPO = resolve(import.meta.dir, "..");
+	const extDir = join(agentDir, "extensions");
+	mkdirSync(extDir, { recursive: true });
+	symlinkSync(resolve(REPO, "extensions", "a2a-bridge.ts"), join(extDir, "a2a-bridge.ts"));
 }

@@ -30,11 +30,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { seedModels } from "./harness";
+import { linkExtension, seedModels } from "./harness";
 
 const home = mkdtempSync(join(tmpdir(), "blob-"));
 const agentDir = join(home, ".omp", "agent");
 console.log(`  ${seedModels(agentDir)}`);
+linkExtension(agentDir);
 
 const host = spawn("omp", ["--mode", "rpc"], { env: { ...process.env, HOME: home }, stdio: ["pipe", "pipe", "pipe"] });
 let out = "";

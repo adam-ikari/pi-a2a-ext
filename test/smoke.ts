@@ -4,15 +4,15 @@
  * the real Main session. Prints "SMOKE OK" on success.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { seedModels } from "./harness.ts";
+import { linkExtension, seedModels } from "./harness.ts";
 
-const REPO = resolve(import.meta.dir, "..");
+const _REPO = resolve(import.meta.dir, "..");
 const tmp = mkdtempSync(join(tmpdir(), "a2a-smoke-"));
 const agentDir = join(tmp, ".omp", "agent");
-const extDir = join(agentDir, "extensions");
+const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2a-bridge.json");
 const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
@@ -20,8 +20,7 @@ const payload = `SMOKE-PAYLOAD-${Date.now()}\nsecond line\n`;
 const dataFile = join(tmp, "payload.txt");
 const TOKEN = "smoke-token";
 
-mkdirSync(extDir, { recursive: true });
-symlinkSync(resolve(REPO, "extensions", "a2a-bridge.ts"), join(extDir, "a2a-bridge.ts"));
+linkExtension(agentDir);
 writeFileSync(dataFile, payload);
 
 // Pick a free port so the config can pin it (port 0 would leave the actual
