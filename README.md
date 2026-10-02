@@ -168,15 +168,50 @@ Remote calls reuse the host's approval gate (`ExtensionToolWrapper`) entirely an
 - If the host configures a tool as `prompt` in `tools.approval` **and** the host has an interactive UI (TUI), the remote call raises an Approve/Deny prompt; once the user confirms, it continues and the result returns by the same path.
 - With no interactive UI (measured in rpc mode; print takes the same no-UI path but is untested), a `prompt` approval **neither executes the command nor returns**: the request hangs indefinitely (measured ≥90s) while the host waits for a UI answer that can never arrive. **Callers must impose their own timeout**; a hung call leaves a `start` record with no matching `done` in the audit log (see below), so it is detectable.
 
-## File transfer
+## Moving files
 
-The bridge ships no file tools. To move files between machines, use the host's own tools (the remote side sees `mcp__omp-host__read`, `mcp__omp-host__bash`, …), or SSH for large payloads:
+When a remote agent has to deliver a firmware image or another binary to the host
+to flash, `tools/call` is the only route — the bridge has one endpoint and no
+second channel. `scp` does not apply: the host binds `127.0.0.1` by default, so a
+client on a cloud box cannot reach it.
 
-```sh
-scp ./data.tar user@host:~/data.tar
+**Upload (remote → host) works.** Append through `bash`, base64-encoding each
+chunk:
+
+```json
+{ "name": "bash", "arguments": { "command": "printf '%s' '<base64>' >> /tmp/fw.b64" } }
 ```
 
-The bridge sets no `fileRoot`, no `deny` list, and does not interpret paths — calls land on the host's real files and shell, and the host's own configuration decides what is permitted (see "Security and boundaries").
+Once every chunk is in, `base64 -d` the result. Measured: a 16 MB binary took 55
+requests and 1.9 s, byte-identical; at the full chunk size it takes 21. Enough
+for firmware.
+
+How much fits in one request depends on the encoding, and both hit the same 1 MB
+request-body cap (`maxRequestBodySize` in `src/server.ts`):
+
+| encoding | per request | for 16 MB |
+| --- | --- | --- |
+| base64 (1.33 chars/byte) | 1020 KB chars = 765 KB raw | 21 chunks |
+| `\xNN` escapes (4 chars/byte) | 200 KB raw (800 KB command) | 80 chunks |
+
+1030 KB of base64 chars is a 413 — that is the 1 MB minus JSON overhead. For plain
+text the `write` tool is cheaper, about 900 KB per call.
+
+**Download (host → remote) does not work.** Three host-side limits stack, and any
+one of them alone is enough:
+
+- `read` refuses a single line over 150 KB (`exceeds 150.0KB limit`); a 1 MB
+  multi-line file comes back as roughly 16 KB
+- `bash` output past 768 bytes is truncated, with a pointer to `artifact://N`
+- `read artifact://N` is itself truncated at about 150 KB
+
+So a remote agent cannot pull a large file off the host, only read small slices
+(measured: 20 `dd` slices recovered about 3.2 MB of a 4 MB file). Making download
+work means letting the bridge read files directly instead of going through host
+tools — a different design, one where the bridge starts interpreting paths and the
+boundary described under "Security and boundaries" no longer holds.
+
+How paths are interpreted, and what is permitted, see "Security and boundaries".
 
 ## Devices
 
