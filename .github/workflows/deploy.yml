@@ -20,10 +20,6 @@ jobs:
     defaults:
       run:
         working-directory: website
-    env:
-      # Set to "1" to publish only the holding page. The step below keys off this
-      # same value, so the two cannot drift apart.
-      DRAFT: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,21 +31,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
-      # DRAFT=1 publishes a single holding page instead of the site. The
-      # extension's shape is still being decided, so the docs describe something
-      # that may change. Drop this env var (and the one in ci.yml) to bring the
-      # site back — the repo's markdown was never touched.
       - run: bun install
       - run: bun run build
       # The diagrams render client-side, so a green build does not prove they
       # appear. Load the built site in a real browser and assert on the text
       # inside the rendered SVG.
-      #
-      # Skipped under DRAFT: the pages this asserts on are not published, so a
-      # failure here would say nothing about the holding page. The build step
-      # still catches dead links in whatever *is* published.
       - run: bun run check
-        if: env.DRAFT != '1'
       # VitePress config reads GITHUB_REPOSITORY to derive `base` for project pages.
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

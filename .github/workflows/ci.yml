@@ -91,11 +91,6 @@ jobs:
     defaults:
       run:
         working-directory: website
-    env:
-      # Mirrors deploy.yml. Under DRAFT the site is a single holding page, so the
-      # render/SEO checks below have no pages to run against. Keeping the two
-      # workflows on the same value stops CI from testing a site nobody sees.
-      DRAFT: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,7 +127,4 @@ jobs:
           done
           echo "none of google-chrome / chromium-browser / chromium is present" >&2
           exit 1
-      # Skipped under DRAFT: the pages it asserts on are not published, so a red
-      # here would not describe anything a reader can reach.
       - run: bun run check
-        if: env.DRAFT != '1'
