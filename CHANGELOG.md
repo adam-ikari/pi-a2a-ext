@@ -1,6 +1,21 @@
 # Changelog
 
-本项目暂无 git 标签/发布版本，按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。
+
+本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
+
+## v0.1.0 — 首次发布
+
+这个扩展在宿主 `session_start` 时起一个 MCP 服务器（`2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`），把宿主会话里的工具暴露给远程 MCP 客户端。执行落在宿主真实的文件与 shell 上，宿主不做模型推理。
+
+- **安装**：`omp install https://github.com/adam-ikari/pi-a2a-ext.git`。只这一条路，不发 npm
+- **`tools/list`** 返回宿主注册表，原样透传，不过滤
+- **`tools/call`** 走宿主 `Main` 会话的 `getToolByName(name).execute()`，注入真实的 `session.settings` 与 `ExtensionContext ui`，所以宿主审批门照常生效
+- **`POST /blob`** 收原始字节（上传专用）。100 MB 镜像一次请求传完，实测字节一致。不经宿主审批门、桥自己解释路径——这两条代价写在 README「安全与边界」与协议页里
+- **审计**：每次远程调用写两条 JSONL（`start`/`done` 配对），`/blob` 写入记 `blob:write`
+- 核验：54 单测 / 19 blob / 29 hardening / 28 install / smoke / approval，另有站点的 34 项渲染与 SEO 核验
+
+下面各节是这个版本之前的内部演进，按日期倒序。
 
 ## 2026-10-02 — 端到端每次重装：原先验的是冻结的拷贝
 
