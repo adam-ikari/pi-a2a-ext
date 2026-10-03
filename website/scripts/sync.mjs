@@ -4,7 +4,7 @@
  *
  *   docs/**            -> content/**            (verbatim copy)
  *   README_ZN.md       -> content/intro.md      (frontmatter + link rewrites)
- *   CHANGELOG.md       -> content/changelog.md  (frontmatter + H1 strip)
+ *   CHANGELOG.md       -> content/changelog.md  (frontmatter, H1 re-emitted)
  *   protocol.md        -> link rewrites (repo-relative -> site-relative)
  *   index.md (home)    -> content/index.md      (VitePress home layout)
  *
@@ -51,6 +51,31 @@ features: []
 
 cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 
+// Per-page descriptions. `transformHead` already prefers `pageData.description`
+// over the site-wide one, but nothing set it — so every page carried the same
+// string, which is how a search engine sees near-duplicate pages. Each is taken
+// from what that page actually says.
+const PAGE_DESCRIPTIONS = {
+	"protocol.md":
+		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /blob 的原始字节上传与它放弃的东西。",
+	"testing.md":
+		"核验矩阵：54 单测、19 项原始字节上传、29 项加固、28 项发布包与端到端、审批边界判别。附插件发现与 HOME 的实测结论。",
+	"computer-use.md":
+		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行的是真工具而非模拟操作，目录是显式的而非猜的。",
+};
+for (const [file, description] of Object.entries(PAGE_DESCRIPTIONS)) {
+	const target = join(CONTENT, file);
+	const body = readFileSync(target, "utf8");
+	if (body.startsWith("---")) continue; // already has frontmatter
+	// Keep the H1 and re-emit it under the frontmatter. Dropping it left these
+	// pages starting at h2 — the same defect /intro had. The page title in
+	// frontmatter is what the nav and <title> use; the H1 is what the page shows.
+	const h1 = body.match(/^# (.+)\n/);
+	const rest = body.replace(/^# .*\n+/, "");
+	const heading = h1 ? `\n# ${h1[1]}\n` : "";
+	writeFileSync(target, `---\ndescription: ${description}\n---\n${heading}\n${rest}`);
+}
+
 // README_ZN.md -> intro.md. The site is the Chinese one: README.md is the
 // English default and README_ZN.md the translation, so sync the translation
 // and strip its language-switch line (the site has a single locale).
@@ -67,17 +92,29 @@ const intro = readFileSync(join(REPO, "README_ZN.md"), "utf8")
 	.replaceAll("](docs/computer-use.md)", "](./computer-use.md)")
 	.replaceAll("](CHANGELOG.md)", "](./changelog.md)")
 	.replaceAll("[LICENSE](LICENSE)", "LICENSE 文件");
-writeFileSync(join(CONTENT, "intro.md"), `---\ntitle: 使用指南\n---\n\n${intro}`);
+// The README's own H1 is the repo name, which the site's `title` already
+// carries, so it goes. That left the page with 15 h2 and no h1 at all — the one
+// page where that matters most, since it is what the nav sends people to. Give
+// it its own h1 rather than promoting a section.
+writeFileSync(
+	join(CONTENT, "intro.md"),
+	`---\ntitle: 使用指南\n---\n\n# 装上它，远程 agent 就能用你本机的工具\n\n${intro}`,
+);
 
-// CHANGELOG -> changelog.md (strip H1, add frontmatter). The same link rewrites
-// as intro: entries link to repo files by their repo-relative path, which does
+// CHANGELOG -> changelog.md (H1 replaced, add frontmatter). The link rewrites
+// are the same: entries link to repo files by repo-relative path, which does
 // not resolve from content/changelog.md.
+// Same treatment: keep an H1 and give the page its own description, so the six
+// pages do not all ship one string.
 const changelog = readFileSync(join(REPO, "CHANGELOG.md"), "utf8")
-	.replace(/^# Changelog\n/, "")
+	.replace(/^# Changelog\n+/, "")
 	.replaceAll("](docs/computer-use.md)", "](./computer-use.md)")
 	.replaceAll("](docs/protocol.md)", "](./protocol.md)")
 	.replaceAll("](docs/testing.md)", "](./testing.md)");
-writeFileSync(join(CONTENT, "changelog.md"), `---\ntitle: 变更日志\n---\n\n${changelog}`);
+writeFileSync(
+	join(CONTENT, "changelog.md"),
+	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的完整演进：POST /blob 的原始字节上传、端到端核验的恢复与推翻、安装方式的收敛，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
+);
 
 // protocol.md: repo-relative links -> site form
 const protocolPath = join(CONTENT, "protocol.md");
@@ -108,20 +145,23 @@ hero:
       link: /protocol
 
 features:
+  - title: 远程能碰到什么
+    details: 宿主注册表原样透传，bash 在其中——adb、idf.py、烧录器都是本机上的命令。宿主挂载的 xd:// 设备走 read/write 的 path。
+    link: /intro#设备
+  - title: 传固件
+    details: POST /blob 收原始字节，不 base64。实测 100 MB 一次请求传完，字节一致。上传专用，GET 会 405——理由在协议页。
+    link: /intro#传文件
   - title: 接上远程 agent
     details: 宿主首次启动时广播桥地址并生成 token，复制进远程客户端的 mcp.json 即连通。跨机走 SSH 端口转发。
     link: /intro
-  - title: 远程能碰到什么
-    details: 宿主注册表原样透传，bash 在其中——adb、idf.py、烧录器都是本机上的命令。宿主挂载的设备同样能用。
-    link: /intro#设备
+  - title: 与 computer use 的区别
+    details: computer use 让模型看屏幕猜坐标去点按，本桥按名字调工具。前者操作像素，后者操作宿主已注册的工具——要推理的那一方也在不同地方。
+    link: /computer-use
   - title: 协议参考
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
-  - title: 与 computer use 的区别
-    details: 本桥按名字调工具，computer use 看屏幕猜坐标。省的是宿主的推理，不是调用方的上下文。
-    link: /computer-use
   - title: 测试与核验
-    details: 单测之外，三个核验脚本起真实的宿主 omp 跑完整流程，另一个核验发布包自包含。
+    details: 单测之外，五个核验起真实的宿主 omp 跑完整流程，另有一个核验发布包自包含。审批核验给出 VERDICT A/B/C。
     link: /testing
 ---
 `;
