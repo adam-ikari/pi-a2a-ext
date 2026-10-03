@@ -50,9 +50,6 @@ import { auditBlob } from "./audit.ts";
 export interface BlobDeps {
 	/** Session id of the caller, for the audit record. */
 	sid: string | null;
-	/** Base for relative paths. Defaults to the host agent directory, which is
-	 * what a relative path means to the host's own tools. */
-	agentDir?: string;
 }
 
 export interface BlobResult {
@@ -66,9 +63,11 @@ export interface BlobResult {
  * the header. `normalize` collapses `..` so the resolved path is canonical
  * before any parent directory has to be created.
  */
-export function resolveBlobPath(input: string, agentDir: string = getAgentDir()): string {
+export function resolveBlobPath(input: string): string {
 	const expanded = input === "~" ? homedir() : input.startsWith("~/") ? join(homedir(), input.slice(2)) : input;
-	return isAbsolute(expanded) ? normalize(expanded) : resolve(agentDir, expanded);
+	// Relative paths resolve against the host agent directory, because that is
+	// what a relative path means to the host's own tools.
+	return isAbsolute(expanded) ? normalize(expanded) : resolve(getAgentDir(), expanded);
 }
 
 /**
@@ -84,7 +83,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 	const path = url.searchParams.get("path");
 	if (!path) return { status: 400, body: { error: "path is required" } };
 
-	const target = resolveBlobPath(path, deps.agentDir);
+	const target = resolveBlobPath(path);
 	// No offset means append at EOF. An explicit offset means "the caller knows
 	// where this chunk belongs", so honour it — but only at EOF or on a fresh
 	// file. Writing into the middle of an existing file would leave the bytes

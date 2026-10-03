@@ -17,8 +17,6 @@ export interface BridgeDeps {
 	serverInfo(): { name: string; version: string };
 	/** Clock override for tests (session TTL / eviction). Defaults to Date.now. */
 	now?(): number;
-	/** Agent directory, for `~/` expansion on the blob path. */
-	agentDir?: string;
 }
 
 /**
@@ -103,10 +101,7 @@ export async function startServer(
 			// endpoint is upload-only by design, so say so with 405 like every other
 			// unsupported verb.
 			if (new URL(req.url).pathname === "/blob" && req.method === "POST") {
-				const blobDeps: BlobDeps = {
-					sid: req.headers.get("mcp-session-id"),
-					agentDir: deps.agentDir,
-				};
+				const blobDeps: BlobDeps = { sid: req.headers.get("mcp-session-id") };
 				const r = await handleBlob(req, new URL(req.url), blobDeps);
 				return r.body === undefined ? new Response(null, { status: r.status }) : json(r.status, r.body);
 			}
