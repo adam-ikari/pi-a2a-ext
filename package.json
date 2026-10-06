@@ -1,7 +1,7 @@
 {
   "name": "pi-a2a-ext",
   "version": "0.1.0",
-  "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with optional sandboxed bidirectional file transfer",
+  "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with a raw-byte upload endpoint",
   "license": "MIT",
   "type": "module",
   "keywords": [
