@@ -31,6 +31,13 @@ These follow from that one job, not from taste:
 
 The test for a proposed change: does it make the bridge more transparent, or does it give the bridge an opinion? Anything that gives it an opinion is a second omp.
 
+## The one exception on record
+
+`POST /blob` gives the bridge two opinions it does not otherwise have: it resolves the path
+itself (no root, no allowlist) and it writes without asking the host's approval gate. Both
+are known costs, listed in `docs/protocol.md` under what the endpoint gives up. Everything
+else here still decides.
+
 ## Writing voice
 
 All user-facing prose in this repo (README, CHANGELOG, `docs/`, site copy, commit messages) is written in a specific voice. Read the `write-like-adam` skill before editing any of it — it carries the rules distilled from the prose already in this repo, plus a self-check (compare the paragraph against the CHANGELOG; if it reads more polished than the entries there, cut it back).
