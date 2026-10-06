@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-01T23:58:33"
+updated: "2026-10-06T13:07:36"
 ---
 
 <!-- compiled_truth -->
@@ -425,3 +425,15 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   summary: "推翻本页 2026-10-01 两条 timeline 里的结论「宿主解析插件目录不受 HOME 影响，因此端到端无法自动化」。**方向对，机制错。** 实测：两个目录行为不同——~/.omp/agent/extensions/ 跟随 HOME（往临时 HOME 放只打印标记的扩展，标记出现），~/.omp/plugins/ 不跟随（桥仍从真实插件目录加载；OMP_PLUGIN_DIR / OMP_PLUGINS_DIR / XDG_DATA_HOME 都改不动）。坏探针只试了 agent 目录，且没给临时 HOME 写 models.yml。**真正的拦路虎是第二条：宿主没有模型配置就不创建 session，扩展在 session_start 加载，于是桥永不广播**——这个症状与「插件发现忽略了我的 HOME」完全一样，单独又误判过一次。test:install 已恢复端到端（17 → 32 项，第五组 9 项，已验过移走插件目录会红）。教训升级为三条：(1) 探针声称隔离某物时用「该物缺席」的反证测；(2) **同一个探针两次给出相反结论时，先查最平凡的前提**（这里是没有 models.yml），不要先怀疑被测系统；(3) 探针的失败详情要限长，否则一行几千字符的 frame 会把真正的错误行淹掉。"
   source: "test:install 恢复端到端；上一条 Q 关于插件发现隔离的结论被推翻"
   affects: [testing, tooling]
+
+- time: 2026-10-06T13:07:30
+  kind: reversal
+  summary: "补记 ：它按决定推翻了「不替 omp 实现沙盒」与「桥不解释路径」两条原则，此前只写在 CHANGELOG 与代码里，本页 timeline 与 compiled_truth 均无记录（read-page grep blob = 0 命中）。取舍本身已在 2026-10-01 那条「桥自带工具绕过宿主审批门，所以不得不自带沙箱——这是一个决定的两个后果」里推出，只是这次选择承担两个后果而不是删掉能力：**(1) 不经宿主审批门**——ExtensionAPI 只有 on(\"tool_approval_requested\")，宿主问扩展答的方向，扩展无法主动发起审批；**(2) 桥自己解释路径**——宿主 resolvePath()/expandPath() 在宿主包内部，BridgeDeps 没有入口，依赖它们会在宿主移动文件时断，于是 src/blob.ts 自实现 ~ 展开与相对/绝对判断，代价是能写宿主能写的任何路径，无根目录无白名单。同时推翻极简化一节记录的代价「100MB 文件不走 MCP 通道（走 SSH/scp，README 早已这么建议）」：实测烧固件这类需求走 tools/call 要 21 次请求（16MB，单块用满 1MB 上限），/blob 省掉 base64 编码（每块少传 33%）。请求体上限 1MB → 128MB（maxRequestBodySize）；实测 100MB 镜像一次请求 0.4s 字节一致，129MB 干净 413，宿主 RSS 空闲 368MB → 一次上传 624MB → 两次并发 846MB（并发非线性叠加，但每个在途大请求仍吃 200MB+）。保住的一样是审计：每次写入留一条 tool=\"blob:write\"，args 只有 path/offset/bytes，内容不进日志。**教训：一次推翻若只落在 CHANGELOG 里，下一轮读到 brain 的人会以为原则从未被动过——推翻也是决定，决定就该进决定页。**"
+  source: "补记 2026-10-02 /blob 一轮（本页此前漏记，2026-10-06 补）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-06T13:07:36
+  kind: evidence
+  summary: "版本漂移第五次复发：宿主 omp 18.6.1、node_modules 18.6.1，pin 与 lockfile 仍 18.4.4，bun test 54 项红 1 项（installed != pin）。pin + lockfile 同步至 18.6.1。全量回归：tsc 0 错误、单测 54/54、biome 干净、SMOKE OK（21 工具）、HARDEN OK（24 项）、BLOB OK（19 项，100MB 一次请求字节一致 0.3s）、PACKAGE OK（28 项）、审批探针 VERDICT B（bash 挂起 90031ms 后由调用方超时抛出，副作用文件未出现，server 存活，审计 start=1 done=0）。pin == host 不变量当前值 = 18.6.1。**注意 CI 的盲区在这里又出现一次**：check job 的 frozen-lockfile 安装下 pin 与 lock 自洽，所以漂移只在本地显形（host-probes job 装的是 pin 本身，比的也是 pin），两个 job 都没法发现 pin 已落后于真实宿主——宿主升级这件事只有版本守卫在有宿主的机器上才看得见，而它 warn-only。**教训：守卫链条的最后一环是「有人在有宿主的机器上跑测试」，不是任何配置项。**"
+  source: "宿主 18.6.1 回归 2026-10-06"
+  affects: [a2a-mcp-bridge]
