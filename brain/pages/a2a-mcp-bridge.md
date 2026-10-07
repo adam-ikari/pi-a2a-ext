@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-06T13:07:36"
+updated: "2026-10-07T08:47:53"
 ---
 
 <!-- compiled_truth -->
@@ -436,4 +436,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "版本漂移第五次复发：宿主 omp 18.6.1、node_modules 18.6.1，pin 与 lockfile 仍 18.4.4，bun test 54 项红 1 项（installed != pin）。pin + lockfile 同步至 18.6.1。全量回归：tsc 0 错误、单测 54/54、biome 干净、SMOKE OK（21 工具）、HARDEN OK（24 项）、BLOB OK（19 项，100MB 一次请求字节一致 0.3s）、PACKAGE OK（28 项）、审批探针 VERDICT B（bash 挂起 90031ms 后由调用方超时抛出，副作用文件未出现，server 存活，审计 start=1 done=0）。pin == host 不变量当前值 = 18.6.1。**注意 CI 的盲区在这里又出现一次**：check job 的 frozen-lockfile 安装下 pin 与 lock 自洽，所以漂移只在本地显形（host-probes job 装的是 pin 本身，比的也是 pin），两个 job 都没法发现 pin 已落后于真实宿主——宿主升级这件事只有版本守卫在有宿主的机器上才看得见，而它 warn-only。**教训：守卫链条的最后一环是「有人在有宿主的机器上跑测试」，不是任何配置项。**"
   source: "宿主 18.6.1 回归 2026-10-06"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-07T08:47:53
+  kind: evidence
+  summary: "版本漂移第六次复发，且这次能说清一半机制：宿主 omp 有 startup.checkUpdate（默认开，启动时查更新），所以宿主升级不需要本仓库做任何事；10-06 同步到 18.6.1 并推完，10-07 宿主与 node_modules 已到 18.6.3，pin 18.6.1，bun test 又红——修复保质期不到一天，「保持现状」的成本从偶发变成跟节奏走。仍未知的是谁在改本仓库的 node_modules，前五次都记成「同一未知机制」，继续不假装知道。另外把 brain 六页 root page 的占位符全部换成实内容（background / architecture / flow / mindmap / stack，加 roadmap），内容只从源码与既有记录推，不补想象出来的里程碑；五张 mermaid 用站点自带的 mermaid 11.17.2 在 jsdom 下 parse 过，并先证明该探针对坏语法确实 FAIL（未闭合节点与双 root 各报一条），否则「全 ok」不算证据。**教训：占位符页比空页更糟——它看起来像个计划；而「探针全 ok」这句话本身也要先反证探针会红。**"
+  source: "六页 root page 补实 + 漂移第六次复发 2026-10-07"
   affects: [a2a-mcp-bridge]
