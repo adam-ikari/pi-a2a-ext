@@ -17,6 +17,15 @@
 
 下面各节是这个版本之前的内部演进，按日期倒序。
 
+## 2026-10-07 — 版本守卫从 warn 改成 fail
+
+- fix: **「pin == 宿主版本」这条守卫此前只 warn，而它是这条不变量唯一的信号**。复发六次，`bun test` 每次红一项，但没人必须处理。宿主自己会升级（omp 有 `startup.checkUpdate`，默认开），CI 两个 job 都看不见真实宿主升过——`check` 用 frozen-lockfile 装，pin 与 lock 自洽；`host-probes` 装的就是 pin 本身，比的也是 pin。**没人必须处理的 warn 不是守卫**，所以宿主比较改成 fail，失败信息同时给出两个版本与修法
+- 无宿主时仍然跳过（CI 的 `check` job 就是这种形态，无可比对象）；确实要对着别的宿主版本跑时用 `A2A_SKIP_HOST_VERSION_CHECK=1`，会打一行大声的 SKIPPED，不静默
+- 三条路径都反证过：伪造一个报 `18.9.9` 的 `omp` → 如实红；`OMP_BIN` 指向不存在的路径 → 跳过；跳过开关打开 → 大声跳过
+- 途中自己写错过一次断言（无条件拼了不匹配那句，于是永远不等），由「pin 已同步却仍红」暴露出来
+- chore: pi-* pin 与 lockfile 同步至 **18.6.3**。18.6.3 全量回归：tsc 0 错误、单测 54/54、biome 干净、SMOKE OK（21 工具）、HARDEN OK（29 项）、BLOB OK（19 项）、PACKAGE OK（28 项）、审批探针 VERDICT B（挂起 90s，无副作用，审计 start=1 done=0）
+- docs: `docs/testing.md` 此前完全没写这个守卫，补一节：四项断言各是什么、CI 无宿主时哪几项生效、跳过开关
+
 ## 2026-10-02 — 端到端每次重装：原先验的是冻结的拷贝
 
 - fix: **`test:install` 端到端那组一直在验一份陈旧拷贝**。上一提交写的 `if (!existsSync(installedPlugin))` 表示「已装就跳过」，但 git URL 装出来的是**实体拷贝**（实测 `ls -ld` 确认非链接），冻结在装的那一刻。后果：改坏工作区的 `src/bridge.ts` 之后端到端全绿报 `PACKAGE OK`——它根本没看工作区。实测复现过

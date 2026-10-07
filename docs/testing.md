@@ -112,8 +112,23 @@
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
 
+## 版本守卫（`test/versions.test.ts`，`bun test` 的一部分）
+
+「pin == 宿主版本」是手工维护的不变量，复发过六次。四项断言：
+
+| 项 | 断言 | CI `check` job（无宿主） |
+| --- | --- | --- |
+| 精确 pin | `@oh-my-pi/*` 用精确版本，无 `^` `~` | 生效 |
+| installed == pin | `node_modules` 与 `package.json` 一致 | 生效（frozen-lockfile 装的就是 pin） |
+| 两个 pin 一致 | `pi-ai` 与 `pi-coding-agent` 同版本（lockstep 发布） | 生效 |
+| 宿主 == pin | `omp --version` 与 pin 相同 | **跳过**（无宿主可比） |
+
+第四项以前只 warn，那是这条不变量唯一的信号恰好落在没人必须处理的地方：宿主自己会升级（`startup.checkUpdate`，默认开），而 CI 两个 job 都看不见——`check` 用 frozen-lockfile 装，pin 与 lock 自洽；`host-probes` 装的就是 pin 本身，比的也是 pin。**没人必须处理的 warn 不是守卫**，所以它现在 fail。
+
+失败信息同时给出两个版本与修法。确实要对着别的宿主版本跑时用 `A2A_SKIP_HOST_VERSION_CHECK=1`，会打一行大声的 SKIPPED 日志，不会静默。宿主二进制认 `OMP_BIN`。
+
 ## 约定
 
 - `test/*.test.ts` 被 `bun test` 自动发现；核验脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
-- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计日志路径，默认 `<agentDir>/a2a-bridge.log`）。
+- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计日志路径，默认 `<agentDir>/a2a-bridge.log`）、`A2A_SKIP_HOST_VERSION_CHECK`（设 `1` 跳过版本守卫的宿主比较，见上一节）。
 - 判定性结论（如审批挂起语义）必须由核验复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。
