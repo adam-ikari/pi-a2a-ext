@@ -2,10 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Version guard: the "pin == host omp version" invariant is hand-maintained
-// and silently drifted before (host 18.2.11 vs pin 18.2.10, node_modules
-// desynced from its own lock). Assert everything checkable locally; only warn
-// when the host binary disagrees — that requires the operator to upgrade.
+// Version guard: the "pin == host omp version" invariant is hand-maintained and
+// has drifted six times. Assert everything checkable locally.
+//
+// The host comparison *fails* when a host binary is present and disagrees. It
+// used to only warn, and that was the whole blind spot: the host upgrades
+// itself (`startup.checkUpdate`, on by default), neither CI job can see it
+// (one installs from the frozen lockfile, the other installs the pin itself),
+// so a warning on the one machine that has a host is the only signal there is.
+// A warning that nobody must act on is not a guard.
+//
+// No host on PATH (CI's `check` job) is not a mismatch — there is nothing to
+// compare against, so the check skips. Deliberately testing against a different
+// host version is A2A_SKIP_HOST_VERSION_CHECK=1, which logs loudly.
+const SKIP_ENV = "A2A_SKIP_HOST_VERSION_CHECK";
 const root = join(import.meta.dir, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
 	devDependencies: Record<string, string>;
@@ -34,7 +44,7 @@ describe("version guard", () => {
 
 	// Spawning the host CLI is not instantaneous (omp boot is ~8s on a loaded
 	// box), so this test needs a timeout well above bun's 5s default.
-	test("host omp version vs pins (warn only; skipped when omp absent)", () => {
+	test("host omp version == pin (skipped when omp absent)", () => {
 		let out = "";
 		try {
 			const r = Bun.spawnSync([process.env.OMP_BIN ?? "omp", "--version"], { stdout: "pipe", stderr: "pipe" });
@@ -48,8 +58,17 @@ describe("version guard", () => {
 			return;
 		}
 		const pin = pkg.devDependencies["@oh-my-pi/pi-coding-agent"];
-		if (m[1] !== pin) {
-			console.warn(`[versions] host omp ${m[1]} != pinned ${pin} — update devDependencies and re-run bun install`);
+		if (process.env[SKIP_ENV] === "1") {
+			console.warn(`[versions] SKIPPED by ${SKIP_ENV}=1 — host omp ${m[1]} vs pin ${pin} NOT verified`);
+			return;
 		}
+		// The assertion compares strings so the failure message names both
+		// versions and the fix; the "received" side is only the mismatch text
+		// when there is a mismatch.
+		const message =
+			m[1] === pin
+				? `host omp ${m[1]} == pinned ${pin}`
+				: `host omp ${m[1]} != pinned ${pin} — update devDependencies to ${m[1]} and re-run \`bun install\``;
+		expect(message).toBe(`host omp ${pin} == pinned ${pin}`);
 	}, 30_000);
 });
