@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-07T08:47:53"
+updated: "2026-10-07T09:20:09"
 ---
 
 <!-- compiled_truth -->
@@ -442,4 +442,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "版本漂移第六次复发，且这次能说清一半机制：宿主 omp 有 startup.checkUpdate（默认开，启动时查更新），所以宿主升级不需要本仓库做任何事；10-06 同步到 18.6.1 并推完，10-07 宿主与 node_modules 已到 18.6.3，pin 18.6.1，bun test 又红——修复保质期不到一天，「保持现状」的成本从偶发变成跟节奏走。仍未知的是谁在改本仓库的 node_modules，前五次都记成「同一未知机制」，继续不假装知道。另外把 brain 六页 root page 的占位符全部换成实内容（background / architecture / flow / mindmap / stack，加 roadmap），内容只从源码与既有记录推，不补想象出来的里程碑；五张 mermaid 用站点自带的 mermaid 11.17.2 在 jsdom 下 parse 过，并先证明该探针对坏语法确实 FAIL（未闭合节点与双 root 各报一条），否则「全 ok」不算证据。**教训：占位符页比空页更糟——它看起来像个计划；而「探针全 ok」这句话本身也要先反证探针会红。**"
   source: "六页 root page 补实 + 漂移第六次复发 2026-10-07"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-07T09:20:09
+  kind: decision
+  summary: "关闭 roadmap 里那条未决线程，选定第二个选项：test/versions.test.ts 的宿主比较从 warn 改成 **fail**。理由三条，全部实测：(1) 宿主 omp 有 startup.checkUpdate（默认开），自己会升级，节奏不由本仓库定；(2) CI 两个 job 结构上都看不见真实宿主升过——check 用 frozen-lockfile 装（pin 与 lock 自洽），host-probes 装的就是 pin 本身（比的是 pin），所以「宿主已升级」这个事实只存在于有宿主的机器上；(3) 复发六次，最近两次隔了不到一天，warn 的保质期比修复的保质期还短。**没人必须处理的 warn 不是守卫**——这与本页「守卫失效的两种形态」是同一条：必然失败的检查等于没有检查，没人处理的 warn 也一样。配套两条边界：无宿主时跳过（CI check job 就是这种形态，反证过 OMP_BIN 指向不存在路径 → 跳过而非误红）；确实要对着别的宿主跑用 A2A_SKIP_HOST_VERSION_CHECK=1，打印大声的 SKIPPED，不静默。写第一版断言时自己写错——无条件拼了不匹配那句，于是期望值永远不等，表现为「pin 已同步却仍红」，由这个不合理现象自己暴露。教训：断言的失败信息不该由无条件构造决定；两支文案不同的时候，先写清楚「匹配那支长什么样」。pi-* pin 与 lockfile 同步至 18.6.3，全量回归绿（tsc 0 / 54 单测 / biome / SMOKE 21 工具 / HARDEN 29 / BLOB 19 / PACKAGE 28 / 审批 VERDICT B）。"
+  source: "版本守卫 warn → fail 2026-10-07"
   affects: [a2a-mcp-bridge]
