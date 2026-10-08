@@ -81,6 +81,12 @@ jobs:
       # keep that door honest.
       - name: test:blob — raw-byte upload over POST /blob
         run: bun run test:blob
+      # The narrative suite: every scenario ends with its consequence checked
+      # through a channel other than the one that produced it (filesystem, audit
+      # log, port state). Each scenario has been shown to fail against a
+      # deliberately broken bridge — see docs/testing.md.
+      - name: test:scenario — end-to-end scenarios, verified off-channel
+        run: bun run test:scenario
       - name: test:install — package self-containment and a real host over MCP
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)

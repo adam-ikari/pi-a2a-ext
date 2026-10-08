@@ -11,6 +11,7 @@
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:blob` | 原始字节上传（`POST /blob`），19 项 | 是 | `BLOB OK` |
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
+| `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
 统一前置（五个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
@@ -111,6 +112,38 @@
 | 审计不可见 | 无 start 记录；或判 B 却有 done | 派发期审计被破坏 | 1 |
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
+
+## `test:scenario` — 端到端场景核验（10 个叙事 / 54 步）
+
+其余五个探针是**平铺的断言**：每项一个观察，彼此独立。这个探针反过来——每个场景是一条有头有尾的叙事，而**结尾状态要从产生它的那条通道之外去验**：
+
+| 场景 | 结尾从哪条通道验 |
+| --- | --- |
+| `/blob` 写进去的东西，宿主 `read` 读得回来 | 宿主自己的 `read` 工具（桥的路径解析是它自己的事，只比字节会漏） |
+| 远程 `bash` 的副作用 | 文件系统 + 审计日志（记录里的参数必须点名那个文件） |
+| 两个客户端共用一个 token | A 的 `DELETE` 之后 B 仍可用；审计里两个 sid 都在 |
+| 外部改配置 | 运行中的服务器只认启动时的 token；重启后新 token 生效 |
+| 配置端口被占 | 广播的端口不是被占那个，且带告警，桥在新端口可连 |
+| 配置损坏 | **不广播**、宿主仍活着、报错点名文件与字段 |
+| `--approval-mode=write` | 读立刻答（25ms），`bash` 无答案（挂住），审计留下 start 无 done，桥仍可用 |
+| 宿主结束 | 端口不再接受连接 |
+| 8 路并发上传 | 每个文件只有自己的字节，且没有两个文件同尺寸 |
+| 挂载设备 | `read {"path":"xd://"}` 不报错（实测本机 5 个设备） |
+
+**每个场景都反证过会红**，方法是把对应的实现改坏再跑：
+
+| 注入的缺陷 | 变红的那一步 |
+| --- | --- |
+| `/blob` 一律覆盖写，不追加 | 「文件现在包含两段且有序」「第一段没被第二段截断」 |
+| 非法 `port` 不再 fail-closed | 「不广播」「报错点名文件与字段」 |
+| 审计不记 `sid` | 「记录带调用方会话 id」「审计归属到两个客户端」 |
+| `DELETE` 清空整张会话表 | 「B 不受 A 终止影响」 |
+| 端口占用时直接抛错不回落 | 「在另一个端口广播」「宿主告警」「桥在新端口可连」 |
+| 暴露面校验删除 | 场景套件**不红**——归 `test:hardening` 管（实测它红两项） |
+
+第一轮反证时场景套件对「一律覆盖写」是绿的：对一个还不存在的文件，追加与截断是同一个操作。补了一段显式 offset 的追加才咬得住。同一轮反证还揪出探针自身的两个毛病——`rpc()` 没有默认超时，桥没起来时会挂在占用端口上（现在恒有 20s 上限）；以及 `test:install` 那项「设备名被拒」只断言 `isError`，暴露门一去掉就会因为**设备自己**拒了而绿——理由错了也绿。
+
+这套场景**不覆盖**什么，各由谁管，写在 `test/scenario.ts` 的文件头：暴露面与协议层拒绝归 `test:hardening`，单次 `/blob` 的字节一致性与 offset 冲突归 `test:blob`，prompt 档挂起归 `test:approval`，发布包自包含归 `test:install`。
 
 ## 版本守卫（`test/versions.test.ts`，`bun test` 的一部分）
 
