@@ -316,9 +316,14 @@ try {
 		);
 
 		const dev = await rpc("tools/call", { name: "xd://debug", arguments: {} }, sid);
+		// Assert *which* refusal, not just that there was one. With the exposure
+		// gate removed this call reaches the host and the device rejects it with
+		// its own message ("Unsupported debug action: undefined") — still
+		// isError, so a bare isError check would stay green for the wrong reason.
+		const devText = (dev.body?.result?.content ?? []).map((c: { text?: string }) => c.text ?? "").join(" ");
 		check(
-			dev.body?.result?.isError === true,
-			"tools/call on a device name is refused",
+			dev.body?.result?.isError === true && devText.includes("is not exposed by this bridge"),
+			"tools/call on a device name is refused by the bridge's exposure gate",
 			JSON.stringify(dev.body).slice(0, 160),
 		);
 
