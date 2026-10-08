@@ -18,11 +18,13 @@
  *
  * ## The ceiling
  *
- * One request carries at most 1 MB: `maxRequestBodySize` on `Bun.serve` in
+ * One request carries at most 128 MB: `maxRequestBodySize` on `Bun.serve` in
  * src/server.ts caps every request on this port, MCP included. The endpoint does
- * not raise it — that would let concurrent uploads each buffer tens of MB. So a
- * large image still chunks, but the chunk is raw bytes rather than base64, which
- * is ~33% less to send and skips the encode/decode on both sides.
+ * not raise it — that would let concurrent uploads each buffer up to the new
+ * ceiling. So a larger image still chunks, but the chunk is raw bytes rather than
+ * base64, which is ~33% less to send and skips the encode/decode on both sides.
+ * The measured memory cost of the cap is in the RSS block near the end of this
+ * probe, and what the docs conclude from it is in `docs/protocol.md`.
  */
 
 import { spawn } from "node:child_process";
@@ -173,6 +175,174 @@ try {
 	const log = await Bun.file(join(agentDir, "a2a-bridge.log")).text();
 	check("the write is audited as blob:write", log.includes('"tool":"blob:write"'));
 	check("the audit record holds no payload", !log.includes(bytes.subarray(0, 48).toString("base64")));
+
+	/**
+	 * RSS across a big upload.
+	 *
+	 * docs/protocol.md carries measured host-RSS numbers next to the request-body
+	 * cap. Those were taken once, on host 18.6.1, and the host has moved on since
+	 * — a memory claim in the docs that nothing re-checks rots quietly. This
+	 * measures them again and writes `rss-<hostversion>.json` next to the probe
+	 * (last run wins), so the docs table is refreshed from a run rather than from
+	 * memory.
+	 *
+	 * RSS is the host *process*, read from /proc, so it includes the host itself
+	 * and only the deltas mean anything. Settled readings take the lowest of
+	 * three (Bun returns memory to the OS lazily); the *peaks* are sampled while
+	 * the uploads are still in flight.
+	 *
+	 * No threshold is asserted, and the reason is worth keeping: this was going to
+	 * gate on "concurrent bodies cost less than the sum", and measurement killed
+	 * that idea. Settled deltas for a single 8 MB body across seven runs on an idle
+	 * box were +11, +26, +171, +165, +10, +18, and −6 MB — the last one below the
+	 * idle reading, i.e. the host holding *less* memory after an upload than before
+	 * it. The concurrent pair settled at +147, +148 and +44 MB, its peak at +245,
+	 * +248 and +44 MB. Nothing here is reproducible enough to gate on. That spread
+	 * is Bun's allocator — arena growth plus memory returned lazily from the 100 MB
+	 * upload a few lines earlier — not whether this handler holds the body, so any
+	 * threshold would be measuring the allocator and would redden a busy CI runner
+	 * for reasons that have nothing to do with the bridge.
+	 *
+	 * So the numbers are printed and archived to `rss-<hostversion>.json`, which
+	 * is what the docs table gets refreshed from. What *is* asserted is that the
+	 * uploads succeed at the sizes the docs promise (100 MB in one request), since
+	 * that part is deterministic. The docs' warning about concurrency comes from
+	 * the per-request cap, not from these numbers.
+	 */
+	const rssMb = async (): Promise<number> => {
+		let lowest = Number.POSITIVE_INFINITY;
+		for (let i = 0; i < 3; i++) {
+			const now = rssNow();
+			if (!Number.isFinite(now)) return Number.NaN; // no /proc: nothing to report
+			lowest = Math.min(lowest, now);
+			await Bun.sleep(300);
+		}
+		return lowest;
+	};
+
+	const bigBody = Buffer.alloc(100 * 1024 * 1024, 0x5a);
+
+	const rssNow = (): number => {
+		// Synchronous on purpose. An async read resolves after the fact, so a
+		// fast upload can finish before the first sample lands — which is exactly
+		// what happened with an 8 MB body and a 200 ms interval: peak stayed 0.
+		try {
+			const m = /VmRSS:\s+(\d+) kB/.exec(readFileSync(`/proc/${host.pid}/status`, "utf8"));
+			return m ? Number(m[1]) / 1024 : Number.NaN;
+		} catch {
+			return Number.NaN;
+		}
+	};
+	/**
+	 * Peak, not settled — settled cannot see an in-flight body at all.
+	 *
+	 * This ordering matters and is not accidental: an earlier version sampled
+	 * settled RSS only, which cannot distinguish a body that streamed to disk from
+	 * one held whole in memory, because Bun has released both by then. Peak is
+	 * the only reading that looks while the body is still there.
+	 *
+	 * Note the claim in the header about a mutant peaking near 2x was **not**
+	 * reproducible — two attempted mutants (delaying the write, delaying the read)
+	 * both stayed within the same noise band as the real path. Hence no threshold.
+	 * The peak sampling stays because it is the honest instrument; it just does
+	 * not get to pretend to be a verdict.
+	 */
+	const peakWhile = async (run: () => Promise<unknown>): Promise<number> => {
+		let peak = 0;
+		// 5 ms: an 8 MB upload lands in ~200 ms, and the whole point is to catch
+		// the moment the body is in flight.
+		const sampler = setInterval(() => {
+			const now = rssNow();
+			if (Number.isFinite(now)) peak = Math.max(peak, now);
+		}, 5);
+		try {
+			await run();
+		} finally {
+			// One last sample before stopping, in case the body never overlapped a
+			// tick (the very first upload can already be finished on a fast disk).
+			const now = rssNow();
+			if (Number.isFinite(now)) peak = Math.max(peak, now);
+			clearInterval(sampler);
+		}
+		return peak;
+	};
+
+	const idle = await rssMb();
+	const tRss = Date.now();
+
+	/**
+	 * 8 MB bodies rather than 100 MB, so the deltas sit above the allocator's
+	 * noise floor instead of being swamped by it. The 100 MB path is exercised
+	 * right after, and that one *is* asserted.
+	 */
+	const probeBody = Buffer.alloc(8 * 1024 * 1024, 0x5a);
+
+	const peakOne = await peakWhile(() => post(`?path=${encodeURIComponent(at("rss-single.bin"))}`, probeBody));
+	const afterOne = await rssMb();
+	const rssConc: Response[] = [];
+	const peakTwo = await peakWhile(() =>
+		Promise.all([
+			post(`?path=${encodeURIComponent(at("rss-c1.bin"))}`, probeBody).then((r) => rssConc.push(r)),
+			post(`?path=${encodeURIComponent(at("rss-c2.bin"))}`, probeBody).then((r) => rssConc.push(r)),
+		]),
+	);
+	const afterTwo = await rssMb();
+
+	// The 100 MB path must still work while we are measuring; the byte-identity
+	// assertion for it lives earlier in this probe.
+	const hundredStatus = (await post(`?path=${encodeURIComponent(at("rss-hundred.bin"))}`, bigBody)).status;
+
+	console.log(
+		`      RSS idle ${idle.toFixed(0)} MB | peak: one 8 MB body ${peakOne.toFixed(0)} MB ` +
+			`(+${(peakOne - idle).toFixed(0)}) | two concurrent ${peakTwo.toFixed(0)} MB ` +
+			`(+${(peakTwo - idle).toFixed(0)}) | settled ${afterOne.toFixed(0)}/${afterTwo.toFixed(0)} MB | ` +
+			`100 MB still ${hundredStatus} | ${((Date.now() - tRss) / 1000).toFixed(1)}s | ` +
+			`http=${rssConc.map((r) => r.status).join("/")}`,
+	);
+
+	const finite = Number.isFinite(idle) && Number.isFinite(peakOne) && Number.isFinite(peakTwo) && peakOne > 0;
+	check(
+		"the concurrent uploads were accepted while measuring RSS",
+		rssConc.length === 2 && rssConc.every((r) => r.status === 200),
+	);
+	check("the 100 MB single request still works in this run", hundredStatus === 200, `http=${hundredStatus}`);
+	// Deliberately no threshold on the numbers above — the reason is in the header
+	// of this block. What is gated is only what is deterministic: that the uploads
+	// the docs promise actually happened.
+	if (finite) {
+		const versionOut = await new Response(Bun.spawn(["omp", "--version"]).stdout).text();
+		const hostVersion = versionOut.trim().replace(/^omp\//, "");
+		await Bun.write(
+			join(import.meta.dir, `rss-${hostVersion}.json`),
+			`${JSON.stringify(
+				{
+					hostVersion,
+					measuredAt: new Date().toISOString().slice(0, 10),
+					probeBodyMB: probeBody.length / 1024 / 1024,
+					hundredMBStatus: hundredStatus,
+					idleMB: Math.round(idle),
+					peakOneUploadMB: Math.round(peakOne),
+					peakTwoConcurrentMB: Math.round(peakTwo),
+					settledAfterOneMB: Math.round(afterOne),
+					settledAfterTwoMB: Math.round(afterTwo),
+					peakDeltaOneMB: Math.round(peakOne - idle),
+					peakDeltaTwoMB: Math.round(peakTwo - idle),
+					settledDeltaOneMB: Math.round(afterOne - idle),
+					settledDeltaTwoMB: Math.round(afterTwo - idle),
+				},
+				null,
+				"\t",
+			)}\n`,
+		);
+		console.log(`      wrote test/rss-${hostVersion}.json — refresh the protocol.md table from it`);
+	} else {
+		// The docs promise the table is refreshed per run, so say when it was not:
+		// no /proc means any rss-<version>.json on disk is from an earlier machine,
+		// not from this run.
+		console.log(
+			"      SKIP  RSS not archived (no /proc for the host process) — an existing test/rss-*.json is stale, not this run",
+		);
+	}
 } finally {
 	host.kill("SIGTERM");
 	rmSync(scratch, { recursive: true, force: true });
