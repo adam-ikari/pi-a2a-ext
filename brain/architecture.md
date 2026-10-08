@@ -2,7 +2,7 @@
 slug: architecture
 title: System architecture
 role: system architecture
-updated: "2026-10-07T08:43:56"
+updated: "2026-10-08T01:57:17"
 ---
 
 # System architecture
@@ -24,6 +24,8 @@ updated: "2026-10-07T08:43:56"
 | `src/auth.ts` | 16 | Bearer + `timingSafeEqual` |
 
 宿主 API 只有三处入口，全在 `bridge.ts`：`AgentRegistry.global().get(MAIN_AGENT_ID)`、`session.getToolByName()`、`pi.getAllTools()`。注入的是真实 `session.settings` 与 `ExtensionContext ui`——这样宿主的 `ExtensionToolWrapper` 审批门照常生效，**桥自己一套审批逻辑都不实现**。
+
+一处不经代码即可看出的耦合：`/a2a rotate` 之所以能立刻生效，是因为 `startServer` 捕获的是 `cfg` **对象**而不是它的副本，`rotate` 改的就是同一个对象。哪天有人改成 `startServer({ ...cfg })`，轮换会静默退化成「下次重启才生效」。`test:scenario` 里那条「外部改配置到重启才生效」的场景把两侧一起钉住了。
 
 ## Module graph
 
@@ -47,7 +49,7 @@ graph TD
 ## Constraints
 
 - **零运行时依赖。** `@oh-my-pi/*` 只在 devDependencies，由宿主 `omp:legacy-pi-shim` 在运行时重定向到宿主内嵌副本。运行时依赖它等于 fork 掉 registry（`AgentRegistry.global()` 是模块级 static），`tools/call` 会看不见 Main 会话
-- **pin == 宿主版本。** 扩展对着那个版本做类型检查，`test/versions.test.ts` 硬断言 installed == pin。复发过五次，见 `roadmap` 那条未决线程
+- **pin == 宿主版本。** 扩展对着那个版本做类型检查，`test/versions.test.ts` 硬断言 installed == pin，且宿主比较**失败即红**（无宿主时跳过）
 - **单进程、在宿主内。** 走 stdio 会与运行中的 TUI 抢 stdin/stdout，且 TUI 审批转发需要同进程
 - **请求体上限 128 MB**（`maxRequestBodySize`）。Bun 在 handler 之前缓冲，所以代价是**每个在途请求**的内存，不是预分配
 - **包必须自包含**：`version` + `pi.extensions` + `files: ["extensions/", "src/"]`。少 `files[]` 里的模块会「装得上、加载时才炸」

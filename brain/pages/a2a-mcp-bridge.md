@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-08T01:28:48"
+updated: "2026-10-08T01:57:17"
 ---
 
 <!-- compiled_truth -->
@@ -454,4 +454,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "test:install 的 announce 断言通过时打印的是**失败形态**的 detail：「ok: the host announces the bridge …(no announcement and no short error line)」——标签说广播了，括号说没广播。根因是 check() 的 detail 参数两头都打印，而同一仓库有三种写法：hardening.ts 的 check 不带 detail；blob-probe.ts 用 `cond || !detail ? \"\" : detail` 只在失败时打印；只有 install-probe 两头都打印，且恰好有一处两态不成立的调用点。修法是让 detail 两态各自成立（通过时是广播本身，失败时才扫错误行），并在 check 上把契约写死。**教训一：探针的输出必须两态都读得通——断言成立但输出读起来像失败，比没有输出更坏，因为人会按输出下结论而不是按断言。教训二：同一概念在三处有三种写法时，第三种通常就是藏着缺陷的那处——差异本身是线索，不必逐个审。** 反证：改坏正则 → FAIL 且仍打诊断；复原 → ok 且 detail 是真实地址。项数仍 28，五探针与单测全绿。"
   source: "E2E 探针输出自相矛盾 2026-10-08"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-08T01:56:23
+  kind: decision
+  summary: "新增第六个探针 test/scenario.ts（10 叙事 / 54 步 / 约 45s，接进 CI host-probes），形状与前五个不同：前五个是**平铺断言**（每项一个观察、彼此独立），这个每条是叙事，且**结尾状态从产生它的那条通道之外去验**——远程 bash 看文件系统与审计日志、/blob 写入用宿主 read 读回、会话终止后去连端口、外部改配置看运行中服务器认哪个 token、宿主结束看端口是否还接受。理由是既有的：留在单通道内的推理正是 675 行文件传输面带两个 P1 上线、100 单测全绿的原因，所以「多写测试」不等于「多一条通道」。补上的零覆盖空白：端口占用回落与告警、配置损坏 fail-closed、--approval-mode=write 档（读 25ms 答、bash 挂住、审计 start 无 done）、宿主结束释放端口、两客户端并存与 sid 归因、8 路并发上传互不串扰、xd:// 挂载设备、blob→宿主工具一致性。**每个场景都用注入缺陷反证过会红**，并把边界写进探针文件头：删掉暴露面校验场景套件**不红**（那条归 hardening，实测它红两项）。三条当场揪出的自身缺陷：(1) 场景对「/blob 一律覆盖写」原本是绿的——对不存在的文件追加与截断是同一操作，补显式 offset 追加才咬得住；(2) rpc() 无默认超时，桥没起来会挂在占用端口上（现恒 20s 上限）；(3) 误以为宿主 read 返回裸内容，实际带 [path#hash] 头与行号（像 cat -n）。顺手修 test:install 一项**因错误理由变绿**的断言：设备名被拒只断言 isError，暴露门一去掉就被设备自己以 Unsupported debug action 拒掉而照样绿；改为断言必须是桥的 not exposed。**教训一：一个断言要问「它绿的时候，凭的是什么」——凭另一个原因绿，等于没断言。教训二：探针自身的失败路径也要验，rpc 不设超时就足以让整轮挂死，而挂死不产出信息。**"
+  source: "端到端场景核验 2026-10-08"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-08T01:57:17
+  kind: evidence
+  summary: "架构页补一处不经代码即看出的耦合：/a2a rotate 之所以能立刻生效，是因为 startServer 捕获的是 cfg **对象**而非副本，rotate 改的就是同一对象（extensions/a2a-bridge.ts 的模块级 cfg → startServer(cfg, …) → handler 里 authorize({token: cfg.token})）。改成 startServer({...cfg}) 会让轮换静默退化成「下次重启才生效」，而这种退化没有任何断言会发现——现有测试全部在轮换之后手工重启。test:scenario 的「外部改配置到重启才生效」场景把两侧一起钉住：运行中的服务器只认启动时的 token（外部改写 → 旧 token 仍 200、新 token 401），重启后才读盘上那份。"
+  source: "架构页补 cfg 对象耦合 2026-10-08"
   affects: [a2a-mcp-bridge]
