@@ -267,7 +267,7 @@ Design trade-off (read this before adding a feature):
 - **A call never returns**: the host has no interactive UI and the tool's approval is `prompt` (see [Approval](#approval)) — the command does not execute, but neither does the call return; the caller must impose its own timeout, and the audit log shows a `start` with no `done` for that call (see the audit-log bullet under [Security and boundaries](#security-and-boundaries)).
 - **500 `internal error`**: an internal server fault; the response body is deliberately detail-free (to avoid leaking), and the real cause is in the host's stderr as `[a2a-bridge] internal error: …`.
 - **Config edits do not take effect**: external edits to `a2a-bridge.json` (such as `port`) need a host restart; only `/a2a rotate` applies live at runtime.
-- **`bun test` version guard fails** (development): the installed `@oh-my-pi/pi-*` is out of sync with the pin/lock — `bun install` restores it; an `omp --version` that differs from the pin only warns, so update the two exact versions in `package.json` when you upgrade the host.
+- **`bun test` version guard fails** (development): either the installed `@oh-my-pi/pi-*` is out of sync with the pin/lock (`bun install` restores it), or the local `omp --version` disagrees with the pin (update the two exact versions in `package.json` when you upgrade the host). The host comparison used to warn only, which let the pin drift unnoticed; it fails now, and is skipped only when there is no host on `PATH`. To run against a deliberately different host, set `A2A_SKIP_HOST_VERSION_CHECK=1` — it prints a loud SKIPPED rather than passing silently.
 
 ## Development
 
@@ -279,14 +279,16 @@ bun run lint          # lint + format check (Biome; fix with bunx biome check --
 bun test              # unit tests: test/*.test.ts (protocol/auth/config/exposure gate/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 29 items (needs a local omp)
-bun run test:blob      # POST /blob raw-byte upload, 19 items (needs a local omp)
+bun run test:blob      # POST /blob raw-byte upload, 21 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
+bun run test:scenario  # end-to-end scenarios, 10 narratives / 54 steps, ~45s (needs a local omp)
+bun run test:install   # published-package self-containment + a real host over MCP, 28 items (needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
 
 What each test covers, the preconditions for the real-host checks, and how to read their verdicts (including the approval check's VERDICT A/B/C semantics) are in [docs/testing.md](docs/testing.md).
 
-Dependency note: `@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-ai` are pinned to **exact versions** in `devDependencies`, kept in step with the host omp version, and used only for type checking and unit tests. **Do not load them from `node_modules` at runtime** — the host omp's `omp:legacy-pi-shim` redirects those imports to the same modules bundled inside the host, which is what lets module-level singletons like `AgentRegistry.global()` be shared; update both version numbers when upgrading omp. `bun test` includes a **version guard**: an installed devDep that differs from the pin fails outright, and an `omp --version` that differs from the pin only warns.
+Dependency note: `@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-ai` are pinned to **exact versions** in `devDependencies`, kept in step with the host omp version, and used only for type checking and unit tests. **Do not load them from `node_modules` at runtime** — the host omp's `omp:legacy-pi-shim` redirects those imports to the same modules bundled inside the host, which is what lets module-level singletons like `AgentRegistry.global()` be shared; update both version numbers when upgrading omp. `bun test` includes a **version guard**: an installed devDep that differs from the pin fails outright, and so does a local `omp --version` that differs from the pin (it warned only, until 2026-10-07; a warning nobody had to act on was the whole blind spot).
 
 File layout:
 

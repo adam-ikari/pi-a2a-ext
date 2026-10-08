@@ -9,13 +9,13 @@
 | `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:blob` | 原始字节上传（`POST /blob`），19 项 | 是 | `BLOB OK` |
+| `bun run test:blob` | 原始字节上传（`POST /blob`），21 项 | 是 | `BLOB OK` |
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
-统一前置（五个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-五个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
+六个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
 ## `test:install` — 发布包自包含核验 + 端到端（28 项）
 
@@ -60,7 +60,7 @@
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
-## `test:blob` — 原始字节上传核验（19 项）
+## `test:blob` — 原始字节上传核验（21 项）
 
 **核验 `POST /blob` 能把字节原样放到宿主机上，且每种拒绝都成立。**
 
@@ -72,10 +72,13 @@
 | 拒绝 | 5 | 无 token → 401；缺 `path` → 400；空 body → 400；`offset` 与现大小不符 → 409；`offset` 非整数 → 400 |
 | 仅 POST | 7 | `GET`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS /blob` 各 → 405；文件既没被读回也没被删掉 |
 | 其他 | 3 | 父目录不存在时自动创建；审计写入 `blob:write`；审计不含文件内容 |
+| 内存实测 | 2 | 测量期间的两次并发上传都被接受；这一轮的 100 MB 单请求仍返回 200 |
 
 「仅 POST」那组是补的。接 `/blob` 进 handler 时只测了 POST，其他动词落到哪个分支没人验——于是 `DELETE /blob` 落进了 blob 的处理流程，因为 body 为空返回 400，那个状态码在说谎（读起来像「上传格式不对」，实际是「这个端点没这个方法」）。**接一个新路由时，「哪些方法会落到这里」和「这个路由做什么」是同一个问题的两面。**
 
 100 MB 那条是会抓到旧的 1 MB `maxRequestBodySize` 的那条——它红了才算数。
+
+内存那组只断言「上传确实成了」，不断言 RSS 阈值，原因写在探针文件头，这里记结论：同一个 8 MB 请求的宿主 RSS 安顿增量在七轮里从 −6 MB 跨到 +171 MB（有一轮上传完宿主 RSS 比上传前还低），两个并发的那一项是 +44、+147、+148 MB，峰值 +44、+245、+248 MB。主导这些数的是 Bun 分配器（arena 增长，加上前一步 100 MB 上传延迟归还的内存），不是本桥有没有把 body 留在内存里。拿它们设阈值，测的是分配器，且会在忙碌的 CI runner 上因与桥无关的原因变红。探针每轮把实测覆盖写进 `test/rss-<宿主版本>.json`，`docs/protocol.md` 的内存表从它刷新——那页的数此前只在 18.6.1 上量过一次，没人复核就会烂在文档里。没有 `/proc` 时这组打印 SKIP 并保留旧文件，不会把上一台机器的数当本轮的。
 
 ## `test:hardening` — 加固核验（29 项）
 
