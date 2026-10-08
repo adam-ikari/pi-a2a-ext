@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-07T09:20:09"
+updated: "2026-10-08T01:28:48"
 ---
 
 <!-- compiled_truth -->
@@ -448,4 +448,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "关闭 roadmap 里那条未决线程，选定第二个选项：test/versions.test.ts 的宿主比较从 warn 改成 **fail**。理由三条，全部实测：(1) 宿主 omp 有 startup.checkUpdate（默认开），自己会升级，节奏不由本仓库定；(2) CI 两个 job 结构上都看不见真实宿主升过——check 用 frozen-lockfile 装（pin 与 lock 自洽），host-probes 装的就是 pin 本身（比的是 pin），所以「宿主已升级」这个事实只存在于有宿主的机器上；(3) 复发六次，最近两次隔了不到一天，warn 的保质期比修复的保质期还短。**没人必须处理的 warn 不是守卫**——这与本页「守卫失效的两种形态」是同一条：必然失败的检查等于没有检查，没人处理的 warn 也一样。配套两条边界：无宿主时跳过（CI check job 就是这种形态，反证过 OMP_BIN 指向不存在路径 → 跳过而非误红）；确实要对着别的宿主跑用 A2A_SKIP_HOST_VERSION_CHECK=1，打印大声的 SKIPPED，不静默。写第一版断言时自己写错——无条件拼了不匹配那句，于是期望值永远不等，表现为「pin 已同步却仍红」，由这个不合理现象自己暴露。教训：断言的失败信息不该由无条件构造决定；两支文案不同的时候，先写清楚「匹配那支长什么样」。pi-* pin 与 lockfile 同步至 18.6.3，全量回归绿（tsc 0 / 54 单测 / biome / SMOKE 21 工具 / HARDEN 29 / BLOB 19 / PACKAGE 28 / 审批 VERDICT B）。"
   source: "版本守卫 warn → fail 2026-10-07"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-08T01:28:48
+  kind: evidence
+  summary: "test:install 的 announce 断言通过时打印的是**失败形态**的 detail：「ok: the host announces the bridge …(no announcement and no short error line)」——标签说广播了，括号说没广播。根因是 check() 的 detail 参数两头都打印，而同一仓库有三种写法：hardening.ts 的 check 不带 detail；blob-probe.ts 用 `cond || !detail ? \"\" : detail` 只在失败时打印；只有 install-probe 两头都打印，且恰好有一处两态不成立的调用点。修法是让 detail 两态各自成立（通过时是广播本身，失败时才扫错误行），并在 check 上把契约写死。**教训一：探针的输出必须两态都读得通——断言成立但输出读起来像失败，比没有输出更坏，因为人会按输出下结论而不是按断言。教训二：同一概念在三处有三种写法时，第三种通常就是藏着缺陷的那处——差异本身是线索，不必逐个审。** 反证：改坏正则 → FAIL 且仍打诊断；复原 → ok 且 detail 是真实地址。项数仍 28，五探针与单测全绿。"
+  source: "E2E 探针输出自相矛盾 2026-10-08"
   affects: [a2a-mcp-bridge]
