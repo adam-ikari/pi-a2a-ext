@@ -177,6 +177,116 @@ try {
 	check("the audit record holds no payload", !log.includes(bytes.subarray(0, 48).toString("base64")));
 
 	/**
+	 * Failure and boundary cases.
+	 *
+	 * This endpoint writes without the host's approval gate and resolves the path
+	 * itself — the one documented exception in AGENTS.md. The compensation is the
+	 * audit log, so the cases worth testing are the ones where the bridge has
+	 * already decided to act and then fails partway: a write that gets nowhere, a
+	 * write the server refused before the handler ran, a request whose authorship
+	 * cannot be established. A gap here is a gap in the only trace the bridge
+	 * keeps of itself.
+	 */
+
+	// A write that fails at the OS. /dev/full is the one no-root way to make an
+	// open succeed and the write behind it fail (ENOSPC), so the whole "created the
+	// file, wrote nothing" path is exercised without a loopback tmpfs.
+	const rFull = await post("?path=/dev/full", "enotspace");
+	const fullBody = await rFull.json().catch(() => ({}));
+	check(
+		"a write that fails at the OS is not reported as success",
+		rFull.status >= 400 && !("written" in (fullBody as object)),
+		`http=${rFull.status} body=${JSON.stringify(fullBody)}`,
+	);
+
+	// The same request with no session id: authorised by token, but the bridge
+	// cannot say who called. Recording sid null is the honest outcome — the
+	// alternative is dropping the write, which would be the endpoint taking a
+	// position the protocol never assigned it.
+	const rNoSid = await fetch(`${base}/blob?path=${encodeURIComponent(at("no-sid.bin"))}`, {
+		method: "POST",
+		headers: { authorization: `Bearer ${token}`, "content-type": "application/octet-stream" },
+		body: "sid-less",
+	});
+	check(
+		"a token-only request without a session id still writes, and the audit says who is null",
+		rNoSid.status === 200 && readFileSync(at("no-sid.bin"), "utf8") === "sid-less",
+		`http=${rNoSid.status}`,
+	);
+
+	// Over the cap on a path that ALREADY has bytes. The 413 comes from Bun before
+	// the handler runs, so the existing file must be exactly what it was and the
+	// audit must not mention this path at all: a refusal that leaves a half-written
+	// file behind is the failure mode the byte-identity tests exist to catch.
+	const pre = Buffer.alloc(4096, 0x37);
+	const tPre = at("pre-existing.bin");
+	await Bun.write(tPre, pre);
+	const rBigOver = await post(`?path=${encodeURIComponent(tPre)}`, Buffer.alloc(129 * 1024 * 1024, 0x41));
+	check(
+		"a 413 leaves the existing file byte-for-byte untouched",
+		rBigOver.status === 413 && readFileSync(tPre).equals(pre),
+		`http=${rBigOver.status} size=${statSync(tPre).size}`,
+	);
+
+	// The path is a directory.
+	const rDir = await post(`?path=${encodeURIComponent(scratch)}`, "x");
+	check(
+		"a directory target is refused, not half-written",
+		rDir.status >= 400 && statSync(scratch).isDirectory(),
+		`http=${rDir.status}`,
+	);
+
+	// Path resolution is the bridge's own opinion, so pin the two forms it
+	// documents: `~` against the host's home, a relative path against its agent
+	// directory. Nothing else in this repo says where a caller's bytes land.
+	await post("?path=~/edge-tilde.bin", "tilde");
+	await post("?path=edge-rel.bin", "rel");
+	check(
+		"~ resolves against the host home, not the caller's",
+		existsSync(join(home, "edge-tilde.bin")) && !existsSync(at("edge-tilde.bin")),
+	);
+	check("a relative path resolves against the agent dir", existsSync(join(agentDir, "edge-rel.bin")));
+
+	// Two clients appending to the SAME file at once. `a` is O_APPEND, so each
+	// write lands at the end of the moment; the claim to test is that the result is
+	// two whole chunks in some order rather than a torn interleave.
+	const cA = Buffer.alloc(300 * 1024, 0x41);
+	const cB = Buffer.alloc(300 * 1024, 0x42);
+	const tSame = at("same-path.bin");
+	const sameRes = await Promise.all([
+		post(`?path=${encodeURIComponent(tSame)}`, cA),
+		post(`?path=${encodeURIComponent(tSame)}`, cB),
+	]);
+	const sameBuf = readFileSync(tSame);
+	check(
+		"concurrent appends to one path land as two whole chunks, not interleaved",
+		sameRes.every((r) => r.status === 200) &&
+			sameBuf.length === cA.length + cB.length &&
+			((sameBuf.subarray(0, cA.length).equals(cA) && sameBuf.subarray(cA.length).equals(cB)) ||
+				(sameBuf.subarray(0, cB.length).equals(cB) && sameBuf.subarray(cB.length).equals(cA))),
+		`http=${sameRes.map((r) => r.status).join("/")} size=${sameBuf.length}`,
+	);
+
+	// Every failure above has to be in the audit, or the log is a success-only
+	// ledger and the one compensation the endpoint offers is conditional on the
+	// write working.
+	await Bun.sleep(400);
+	const log2 = await Bun.file(join(agentDir, "a2a-bridge.log")).text();
+	const audited = (needles: string[], isError: boolean) =>
+		log2
+			.split("\n")
+			.filter((l) => l.includes('"blob:write"'))
+			.some((l) => needles.every((n) => l.includes(n)) && l.includes(`"isError":${isError}`));
+	check(
+		"the failed write to /dev/full is audited as an error",
+		audited(["/dev/full"], true),
+		"no error record for /dev/full",
+	);
+	check("the sid-less write is audited, and says the caller is unknown", audited(["no-sid.bin", '"sid":null'], false));
+	check("the directory refusal is audited as an error", audited([`\\"${scratch}\\"`], true));
+	check("the 413 was never audited", !log2.includes("pre-existing.bin"), "a refused upload left a record");
+
+	/**
 	 * RSS across a big upload.
 	 *
 	 * docs/protocol.md carries measured host-RSS numbers next to the request-body
@@ -193,11 +303,12 @@ try {
 	 *
 	 * No threshold is asserted, and the reason is worth keeping: this was going to
 	 * gate on "concurrent bodies cost less than the sum", and measurement killed
-	 * that idea. Settled deltas for a single 8 MB body across seven runs on an idle
-	 * box were +11, +26, +171, +165, +10, +18, and −6 MB — the last one below the
-	 * idle reading, i.e. the host holding *less* memory after an upload than before
-	 * it. The concurrent pair settled at +147, +148 and +44 MB, its peak at +245,
-	 * +248 and +44 MB. Nothing here is reproducible enough to gate on. That spread
+	 * that idea. Settled deltas for a single 8 MB body across ten runs on an idle box
+	 * were +11, +26, +171, +165, +10, +18, −6, −157, +91 and +18 MB, two of them below
+	 * the idle reading, i.e. the host holding *less* memory after an upload than
+	 * before it. The concurrent pair settled at +147, +148, +44, −141, +99 and +32 MB,
+	 * its peak at +245, +248, +44, −141, +100 and +32 MB. Nothing here is reproducible
+	 * enough to gate on. That spread
 	 * is Bun's allocator — arena growth plus memory returned lazily from the 100 MB
 	 * upload a few lines earlier — not whether this handler holds the body, so any
 	 * threshold would be measuring the allocator and would redden a busy CI runner
@@ -208,6 +319,17 @@ try {
 	 * uploads succeed at the sizes the docs promise (100 MB in one request), since
 	 * that part is deterministic. The docs' warning about concurrency comes from
 	 * the per-request cap, not from these numbers.
+	 *
+	 * The mechanism behind the negative ones is worth naming, because it says where
+	 * the number stops being meaningful: `idle` is sampled at the END of this probe,
+	 * after the 100 MB upload above and the rest of the traffic. Whatever Bun has not
+	 * handed back at that instant becomes the baseline, and the baseline then decays
+	 * for the whole measurement window. So every delta carries the sign of the decay,
+	 * not the sign of the upload. The run that printed a concurrent peak of −141 MB
+	 * is that case: the two uploads were sampled while the host was still handing
+	 * memory back, at a level below its own starting point. No fixed sleep settles a
+	 * trending baseline, which is the second reason this block measures rather than
+	 * gates.
 	 */
 	const rssMb = async (): Promise<number> => {
 		let lowest = Number.POSITIVE_INFINITY;
@@ -292,10 +414,13 @@ try {
 	// assertion for it lives earlier in this probe.
 	const hundredStatus = (await post(`?path=${encodeURIComponent(at("rss-hundred.bin"))}`, bigBody)).status;
 
+	// Deltas get an explicit sign: every number in this line is a difference from
+	// `idle`, and a negative one is a real reading, not a formatting artefact.
+	const dlt = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(0)}`;
 	console.log(
 		`      RSS idle ${idle.toFixed(0)} MB | peak: one 8 MB body ${peakOne.toFixed(0)} MB ` +
-			`(+${(peakOne - idle).toFixed(0)}) | two concurrent ${peakTwo.toFixed(0)} MB ` +
-			`(+${(peakTwo - idle).toFixed(0)}) | settled ${afterOne.toFixed(0)}/${afterTwo.toFixed(0)} MB | ` +
+			`(${dlt(peakOne - idle)}) | two concurrent ${peakTwo.toFixed(0)} MB ` +
+			`(${dlt(peakTwo - idle)}) | settled ${afterOne.toFixed(0)}/${afterTwo.toFixed(0)} MB | ` +
 			`100 MB still ${hundredStatus} | ${((Date.now() - tRss) / 1000).toFixed(1)}s | ` +
 			`http=${rssConc.map((r) => r.status).join("/")}`,
 	);
@@ -345,8 +470,15 @@ try {
 	}
 } finally {
 	host.kill("SIGTERM");
-	rmSync(scratch, { recursive: true, force: true });
-	rmSync(home, { recursive: true, force: true });
+	// docs/testing.md promises the failed probes leave the scene behind, so they
+	// have to actually do it: this one deleted the temp HOME and the audit log on
+	// every path, which is where a failed write-audit check loses its own evidence.
+	if (failures > 0) {
+		console.error(`      evidence kept at ${home} (host HOME, incl. the audit log) and ${scratch}`);
+	} else {
+		rmSync(scratch, { recursive: true, force: true });
+		rmSync(home, { recursive: true, force: true });
+	}
 }
 
 if (failures > 0) {

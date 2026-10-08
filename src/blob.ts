@@ -108,7 +108,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 			body: { error: `offset ${offset} does not match the current size ${size}; send no offset to append` },
 		};
 	}
-	const at = explicit ? offset : size;
+	const claimed = explicit ? offset : size;
 
 	const buf = Buffer.from(await req.arrayBuffer());
 	if (buf.length === 0) return { status: 400, body: { error: "empty body" } };
@@ -121,23 +121,70 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 	// below reports it with the path in the message.
 	await mkdir(dirname(target), { recursive: true }).catch(() => {});
 
-	// "a" appends and creates; "w" truncates. `at` is already validated to be the
-	// file's current size, so the two branches agree on the result.
+	// Always "a". `w` truncates at open, and the size above was read before the body
+	// arrived, so two callers starting the same file both see size 0, both pick `w`,
+	// and the second open erases what the first wrote: two 200 responses, half the
+	// bytes. `a` creates the file as well, and on an empty file appending at 0 is
+	// the same operation as truncating, so nothing is lost by dropping `w`.
 	let handle: FileHandle;
 	try {
-		handle = await open(target, at === 0 ? "w" : "a");
+		handle = await open(target, "a");
 	} catch (e) {
-		auditBlob(deps.sid, path, at, 0, `open failed: ${(e as Error).message}`);
+		auditBlob(deps.sid, path, claimed, 0, `open failed: ${(e as Error).message}`);
 		return { status: 500, body: { error: `cannot open ${path}: ${(e as Error).message}` } };
 	}
+	let at = claimed;
 	try {
-		await handle.write(buf);
+		// EOF re-read with the file open, since the size above was taken before the
+		// body was read and another upload may have grown the file meanwhile.
+		//
+		// The two request shapes differ here. An offset-less caller asked for "the
+		// end", so the new end is what it wanted, and reporting that is the truth. An
+		// explicit-offset caller said where the chunk belongs; if the file moved out
+		// from under that claim, the append would land somewhere else while the
+		// response named the offset that was asked for — so it is refused.
+		const current = (await handle.stat()).size;
+		if (explicit && offset !== current) {
+			return {
+				status: 409,
+				body: { error: `the file changed while the upload was in flight: offset ${offset}, current size ${current}` },
+			};
+		}
+		at = explicit ? offset : current;
+		const { bytesWritten } = await handle.write(buf);
+		if (bytesWritten !== buf.length) {
+			// A short write is what a full disk or a quota looks like from here. The
+			// bytes that landed are real, so the file exists but is smaller than what
+			// the caller sent; saying 200 would report the image as complete.
+			const now = (await handle.stat()).size;
+			auditBlob(deps.sid, path, at, bytesWritten, `wrote ${bytesWritten} of ${buf.length} bytes`);
+			return {
+				status: 500,
+				body: {
+					error: `wrote ${bytesWritten} of ${buf.length} bytes to ${path}`,
+					offset: at,
+					size: now,
+				},
+			};
+		}
+	} catch (e) {
+		// Audited before the close so the write appears in the log even when the OS
+		// refused it: this endpoint bypasses the host's approval gate, and the audit
+		// is the only trace of that. A success-only ledger hides exactly the writes
+		// a caller would otherwise have no way to learn about.
+		auditBlob(deps.sid, path, at, 0, `write failed: ${(e as Error).message}`);
+		return { status: 500, body: { error: `cannot write ${path}: ${(e as Error).message}` } };
 	} finally {
 		await handle.close();
 	}
 
+	// The size is read off the file rather than computed, so the response cannot
+	// report a total the file disagrees with. Concurrent uploads to the same path
+	// make this a snapshot of a moving file, not a lock: see docs/protocol.md.
+	const finalSize = (await stat(target)).size;
+
 	// Audited after the write, so the record carries the real byte count. Args are
 	// metadata only — see the header.
 	auditBlob(deps.sid, path, at, buf.length, null);
-	return { status: 200, body: { written: buf.length, offset: at, size: at + buf.length, path } };
+	return { status: 200, body: { written: buf.length, offset: at, size: finalSize, path } };
 }
