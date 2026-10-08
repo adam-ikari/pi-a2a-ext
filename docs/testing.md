@@ -4,16 +4,16 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 54 pass / 0 fail（5 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 55 pass / 0 fail（6 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
-| `bun run test:hardening` | 真实宿主加固核验，29 项 | 是 | `HARDEN OK` |
+| `bun run test:hardening` | 真实宿主加固核验，33 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:blob` | 原始字节上传（`POST /blob`），21 项 | 是 | `BLOB OK` |
+| `bun run test:blob` | 原始字节上传（`POST /blob`），32 项 | 是 | `BLOB OK` |
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 在磁盘上而非 tmpfs，攒多了会挤掉别的东西。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 六个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
@@ -60,7 +60,7 @@
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
-## `test:blob` — 原始字节上传核验（21 项）
+## `test:blob` — 原始字节上传核验（32 项）
 
 **核验 `POST /blob` 能把字节原样放到宿主机上，且每种拒绝都成立。**
 
@@ -72,17 +72,27 @@
 | 拒绝 | 5 | 无 token → 401；缺 `path` → 400；空 body → 400；`offset` 与现大小不符 → 409；`offset` 非整数 → 400 |
 | 仅 POST | 7 | `GET`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS /blob` 各 → 405；文件既没被读回也没被删掉 |
 | 其他 | 3 | 父目录不存在时自动创建；审计写入 `blob:write`；审计不含文件内容 |
+| 失败与边界 | 11 | 操作系统层写失败不报成功（写 `/dev/full`）；失败也进审计并记为 error；只有 token 没有会话头仍能写，审计里 `sid` 为 `null`；413 不碰已存在的文件；目标是目录时整条拒绝；`~` 展到宿主 HOME 而非调用方的；相对路径落在 agent 目录；同一文件两路并发追加各自完整不互相插字节；413 不进审计 |
 | 内存实测 | 2 | 测量期间的两次并发上传都被接受；这一轮的 100 MB 单请求仍返回 200 |
 
 「仅 POST」那组是补的。接 `/blob` 进 handler 时只测了 POST，其他动词落到哪个分支没人验——于是 `DELETE /blob` 落进了 blob 的处理流程，因为 body 为空返回 400，那个状态码在说谎（读起来像「上传格式不对」，实际是「这个端点没这个方法」）。**接一个新路由时，「哪些方法会落到这里」和「这个路由做什么」是同一个问题的两面。**
 
 100 MB 那条是会抓到旧的 1 MB `maxRequestBodySize` 的那条——它红了才算数。
 
-内存那组只断言「上传确实成了」，不断言 RSS 阈值，原因写在探针文件头，这里记结论：同一个 8 MB 请求的宿主 RSS 安顿增量在七轮里从 −6 MB 跨到 +171 MB（有一轮上传完宿主 RSS 比上传前还低），两个并发的那一项是 +44、+147、+148 MB，峰值 +44、+245、+248 MB。主导这些数的是 Bun 分配器（arena 增长，加上前一步 100 MB 上传延迟归还的内存），不是本桥有没有把 body 留在内存里。拿它们设阈值，测的是分配器，且会在忙碌的 CI runner 上因与桥无关的原因变红。探针每轮把实测覆盖写进 `test/rss-<宿主版本>.json`，`docs/protocol.md` 的内存表从它刷新——那页的数此前只在 18.6.1 上量过一次，没人复核就会烂在文档里。没有 `/proc` 时这组打印 SKIP 并保留旧文件，不会把上一台机器的数当本轮的。
+「失败与边界」那组补出两个真缺陷，都先红后绿：
 
-## `test:hardening` — 加固核验（29 项）
+- 两个调用方同时开一个**新**文件时字节会丢。旧实现在 body 读进来之前取文件大小，两边都看到 0，都选 `w` 打开，而 `w` 在 open 时截断，第二次 open 抹掉了第一次已写入的内容。两条请求都回 200，文件只有一半。现在一律 `"a"` 打开，拿到句柄再读一次 EOF。
+- 写失败既不报错也不留审计。`handle.write` 会短写（磁盘满、配额到顶），旧实现不看 `bytesWritten`，回 200 且不写审计记录，等于「一次没人知道的失败」。现在短写与抛错都记 `bytes: 0` 加错误文本，状态 500。
 
-配置种子**故意不带 token**（验证自愈）。29 项分组：
+变异验证按实现还原做（把修复前那份 `src/blob.ts` 整体放回原位，不是随手改一行）：红的正好是这两项。中途一次不忠实的变异（把 `"w"` 分支插在 `at` 赋值之前）触发 TDZ，所有请求 500，红了两条与目标无关的项。那种红不说明任何事，它只证明变异把整条路径打断了。
+
+写失败用 `/dev/full` 来触发：open 成功，写时 ENOSPC，这是无 root 权限下唯一干净的路子。把 `/dev/shm` 填满也能达到目的，但那是全机范围的破坏，不做。
+
+内存那组只断言「上传确实成了」，不断言 RSS 阈值，原因写在探针文件头，这里记结论：同一个 8 MB 请求的宿主 RSS 安顿增量在十轮里从 −157 MB 跨到 +171 MB，其中两轮是负的（上传完宿主 RSS 比上传前还低）；两个并发那一项安顿为 +147、+148、+44、−141、+99、+32 MB，峰值为 +245、+248、+44、−141、+100、+32 MB。负值来自测量本身的位置：`空闲`基线在探针末尾取样，此刻前一步那次 100 MB 上传仍有内存没还给操作系统，基线自己一路往下衰减，每个增量量到的都是衰减的进度，量不到那一次上传。分布的宽度由 Bun 分配器决定（arena 增长加延迟归还），跟本桥有没有把 body 留在内存里无关。拿它们设阈值，测的是分配器，且会在忙碌的 CI runner 上因与桥无关的原因变红。探针每轮把实测覆盖写进 `test/rss-<宿主版本>.json`，`docs/protocol.md` 的内存表从它刷新——那页的数此前只在 18.6.1 上量过一次，没人复核就会烂在文档里。没有 `/proc` 时这组打印 SKIP 并保留旧文件，不会把上一台机器的数当本轮的。
+
+## `test:hardening` — 加固核验（33 项）
+
+配置种子**故意不带 token**（验证自愈）。33 项分组：
 
 | 组 | 项数 | 断言 |
 | --- | --- | --- |
@@ -94,9 +104,14 @@
 | 暴露门 | 4 | 目录含 `read`；无桥自带工具（`a2a_file_*` 一个都没有）；未注册名调用 → `isError` + `not exposed`；别名 `xd://read` 同样拒绝 |
 | 真实执行 | 1 | `tools/call read` 在 Main 会话读回文件内容 |
 | 审计 | 5 | `read` 的 start/done 双相；被拒的调用也有 start；所有 done 能按 id 配对到 start；**记录携带 `sid`（归因）**；审计文件 0600 |
+| 审计轮转 | 4 | 过 512 KB 确实轮转；轮转前后记录总数不缩水（按数量算，6 条前置 + 426 条本轮 = 429 进 `.1` + 3 留在当前文件）；跨两个文件每条 `done` 都能配到 `start`（本轮有 1 条只能在 `.1` 里配到）；`.1` 是完好的 JSONL |
 | 会话终止 | 2 | 已鉴权 DELETE → 204；随后请求该会话 → 404 |
 
 全过 → `HARDEN OK`；任何一项不过 → `FAIL: <label>` + exit 1（并打印宿主日志尾部）。
+
+审计轮转那组此前一项都没有，写它的时候踩到自己一条：原先按「本轮发出的 JSON-RPC id 应能在日志里找到」断言，永远红不了也永远绿不了，因为日志里的 `id` 是本桥为配对生成的 UUID（`src/bridge.ts`），调用方的 JSON-RPC id 从不落盘。改成数量守恒：一次 `tools/call` 写 `start` 与 `done` 两条，N 次调用就要在两个文件里多出 2N 条。让记录变胖也不能靠一个 1000 字符的路径，`redact()` 会把超过 120 字符的字符串折成 `<len:N,sha256:...>`（约 30 字节），那样一条记录才 210 字节，越过 512 KB 需要 1241 次调用；换成 10 个 110 字符的参数之后每条约 1.1 KB，213 次调用就够，这一组从几分钟降到几十秒。
+
+「证据会过期」不在这里测，在 `test/audit.test.ts`：那里直接灌审计模块，一秒内跑完四轮流量，先断言窗口内的记录读得到，再断言最老的两条在两个文件里都查不到。轮转只保留一代，下一次轮转覆盖 `.1`，所以 README「审计日志」里那个「只有 `start` 没有 `done` 就算挂起」的信号是有保质期的。把这条放单测而不是宿主核验，是因为它只关乎文件大小；用宿主驱动要两千次真实调用，还把并发写进来的顺序噪声一起卷进来。
 
 ## `test:approval` — 审批边界判别核验
 
