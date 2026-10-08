@@ -168,5 +168,8 @@ try {
 	child.kill("SIGTERM");
 	await Bun.sleep(500);
 	if (child.exitCode === null) child.kill("SIGKILL");
-	rmSync(tmp, { recursive: true, force: true });
+	// Keep the scene when a check failed: docs/testing.md promises it, and the temp
+	// HOME holds the audit log and host output that explain the failure.
+	if (process.exitCode !== 1) rmSync(tmp, { recursive: true, force: true });
+	else console.error(`      evidence kept at ${tmp}`);
 }

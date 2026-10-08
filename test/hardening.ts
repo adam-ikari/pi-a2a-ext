@@ -215,6 +215,98 @@ try {
 	);
 	check((statSync(auditPath).mode & 0o777) === 0o600, "audit log is 0600");
 
+	/**
+	 * 9b. Audit rotation. `MAX_LOG_BYTES` (512 KB) renames the log to `<path>.1`,
+	 * and nothing in this repo had ever crossed that line. Two properties, and they
+	 * are different ones:
+	 *
+	 * - **A rotation moves the ledger, it does not shrink it.** Every record written
+	 *   must still be reachable in one of the two files. Records that vanish are the
+	 *   failure, because the audit is the only trace this bridge keeps of itself.
+	 *   Only true of ONE crossing: the second rotation overwrites `<path>.1`, so
+	 *   older records do disappear eventually. That half is measured in
+	 *   test/audit.test.ts, where it takes a second to drive instead of thousands of
+	 *   host calls.
+	 * - **The live file is not a complete ledger on its own.** Pairing and hang
+	 *   detection both need `<path>.1` too, so a caller that reads only
+	 *   `a2a-bridge.log` sees `done` records whose `start` sits in the other file. The
+	 *   approval probe reads an unpaired `start` as a hang, so pairing and hang
+	 *   detection both have to look at both files. That is reported here and
+	 *   documented in docs/protocol.md rather than asserted, because the bridge writes
+	 *   the two files and never reads them.
+	 */
+	const parse = (l: string): { id?: number; phase?: string } | null => {
+		try {
+			return JSON.parse(l) as { id?: number; phase?: string };
+		} catch {
+			return null;
+		}
+	};
+	// A 1000-char path would NOT fatten a record: redact() turns any string longer
+	// than 120 chars into `<len:N,sha256:...>`, about 30 bytes, which is why an
+	// earlier version of this burst needed ~1.2k calls to cross 512 KB. Ten values
+	// under that leaf cap pass through, serializeArgs truncates the whole args at
+	// 1024 chars, and each record lands at ~1.1 KB — the cap then takes ~240 calls.
+	const fat = Object.fromEntries(Array.from({ length: 10 }, (_, k) => [`f${k}`, "y".repeat(110)]));
+	// Records already in the log before the burst, so the burst can be checked as a
+	// volume: `tools/call` appends a start and a done, so N calls must add 2N records
+	// somewhere across the two files.
+	//
+	// Not by id. The audit `id` is a per-call UUID (src/bridge.ts) and the JSON-RPC id
+	// is never written, so matching the burst's JSON-RPC ids against the log would be
+	// looking for numbers that were never in it — a check that fails no matter what
+	// the bridge does.
+	const countRecords = (path: string) => {
+		const recs: { id?: number; phase?: string }[] = [];
+		for (const line of readFileSync(path, "utf8").split("\n")) {
+			const rec = parse(line);
+			if (rec) recs.push(rec);
+		}
+		return recs;
+	};
+	const before = countRecords(auditPath).length;
+	let calls = 0;
+	let rotated = false;
+	for (let i = 0; i < 1500 && !rotated; i++) {
+		await post(
+			{
+				jsonrpc: "2.0",
+				id: 90000 + i,
+				method: "tools/call",
+				params: { name: "read", arguments: { path: join(tmp, `gone-${i}.txt`), ...fat } },
+			},
+			{ ...AUTH, "mcp-session-id": sid1 },
+		);
+		calls++;
+		rotated = existsSync(`${auditPath}.1`);
+	}
+	await Bun.sleep(500); // appends are async
+	const rolled = rotated ? countRecords(`${auditPath}.1`) : [];
+	// Re-read: after a rotation the live path is a new file holding only the records
+	// appended since the rename, so the snapshot taken in section 9 is stale.
+	const live = countRecords(auditPath);
+	check(rotated, "the audit log rotated once it passed 512 KB");
+	check(
+		rolled.length + live.length >= before + 2 * calls,
+		`no record vanished across the rotation (${before} before + ${2 * calls} from ${calls} calls, ${rolled.length} rolled + ${live.length} live)`,
+	);
+	const liveStartIds = new Set(live.filter((rec) => rec.phase === "start").map((rec) => String(rec.id)));
+	const orphansInLive = live.filter((rec) => rec.phase === "done" && !liveStartIds.has(String(rec.id))).length;
+	const rolledStartIds = new Set(rolled.filter((rec) => rec.phase === "start").map((rec) => String(rec.id)));
+	check(
+		live
+			.filter((rec) => rec.phase === "done")
+			.every((rec) => liveStartIds.has(String(rec.id)) || rolledStartIds.has(String(rec.id))),
+		`every done pairs with a start across the two files (${orphansInLive} of them pair only through the rotated file)`,
+	);
+	check(
+		rolled.every((rec) => rec.phase === "start" || rec.phase === "done"),
+		"the rotated file is intact JSONL",
+	);
+	if (orphansInLive > 0) {
+		console.log(`      note: ${orphansInLive} done record(s) in the live log have their start only in .1`);
+	}
+
 	// 10. Authenticated DELETE terminates the session (destructive; uses sid2).
 	r = await fetch(base, { method: "DELETE", headers: { ...AUTH, "mcp-session-id": sid2 } });
 	check(r.status === 204, `authenticated DELETE -> 204 (got ${r.status})`);
@@ -233,5 +325,8 @@ try {
 	child.kill("SIGTERM");
 	await Bun.sleep(500);
 	if (child.exitCode === null) child.kill("SIGKILL");
-	rmSync(tmp, { recursive: true, force: true });
+	// Keep the scene when a check failed: docs/testing.md promises it, and the temp
+	// HOME holds the audit log and host output that explain the failure.
+	if (process.exitCode !== 1) rmSync(tmp, { recursive: true, force: true });
+	else console.error(`      evidence kept at ${tmp}`);
 }
