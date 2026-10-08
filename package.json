@@ -39,6 +39,7 @@
     "test:blob": "bun test/blob-probe.ts",
     "test:approval": "bun test/approval-probe.ts",
     "test:install": "bun test/install-probe.ts",
+    "test:scenario": "bun test/scenario.ts",
     "website": "cd website && bun run start"
   },
   "devDependencies": {
