@@ -53,8 +53,15 @@ const REPO = resolve(import.meta.dir, "..");
 const SPEC = process.env.A2A_INSTALL_SPEC ?? "https://github.com/adam-ikari/pi-a2a-ext.git";
 
 let failures = 0;
-function check(cond: unknown, label: string, extra = ""): void {
-	console.log(`${cond ? "ok" : "FAIL"}: ${label}${extra ? ` (${extra})` : ""}`);
+/**
+ * `detail` is printed on **both** paths, so it has to read true on both: a
+ * passing line that says "no announcement" next to a label saying the host
+ * announced the bridge is worse than no line at all. A caller that only has
+ * failure-shaped text to offer should follow `blob-probe.ts` instead and print
+ * it only when the check fails.
+ */
+function check(cond: unknown, label: string, detail = ""): void {
+	console.log(`${cond ? "ok" : "FAIL"}: ${label}${detail ? ` (${detail})` : ""}`);
 	if (!cond) failures++;
 }
 function fail(msg: string): never {
@@ -253,15 +260,19 @@ try {
 	check(
 		!!announced,
 		"the host announces the bridge (a session needs model config to exist at all)",
-		// Detail on failure: short lines that explain a missing announcement. The
-		// rpc frame log includes multi-KB command manifests that match nothing
-		// useful, so anything over 200 chars is dropped rather than printed.
-		[...`${hostOut}\n${hostErr}`.split("\n")]
-			.map((l) => l.trim())
-			.filter((l) => l.length > 0 && l.length < 200)
-			.filter((l) => /error|no model|not available|failed|refus|announc/i.test(l))
-			.slice(0, 3)
-			.join(" | ") || "no announcement and no short error line",
+		// Passed = the announcement is the evidence. Failed = short lines that
+		// explain the silence; the rpc frame log includes multi-KB command
+		// manifests that match nothing useful, so anything over 200 chars is
+		// dropped rather than printed. One string for both paths, because check()
+		// prints it on both.
+		announced?.[0] ||
+			[...`${hostOut}\n${hostErr}`.split("\n")]
+				.map((l) => l.trim())
+				.filter((l) => l.length > 0 && l.length < 200)
+				.filter((l) => /error|no model|not available|failed|refus|announc/i.test(l))
+				.slice(0, 3)
+				.join(" | ") ||
+			"no announcement and no short error line",
 	);
 	baseUrl = announced?.[1] ?? "";
 	const cfg = JSON.parse(readFileSync(join(e2eAgent, "a2a-bridge.json"), "utf8"));
