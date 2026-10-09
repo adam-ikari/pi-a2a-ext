@@ -64,9 +64,14 @@ type RenderEvent = Parameters<AgentSession["agent"]["emitExternalEvent"]>[0];
  * registry is the only authority on that, and it is also what tells one session's
  * shutdown from another's: the `ExtensionContext` handed to a handler is rebuilt on
  * every emit, so it carries no usable identity.
+ *
+ * `null` is the host's own sentinel for a parked or aborted Main (`AgentRef.session`
+ * is `AgentSession | null`), so the reading has to reject it, not just a missing slot —
+ * otherwise this says "serve it" while `buildCallTool` answers "main session not
+ * available" for the same registry state.
  */
 export function hasMainSession(): boolean {
-	return AgentRegistry.global().get(MAIN_AGENT_ID)?.session !== undefined;
+	return AgentRegistry.global().get(MAIN_AGENT_ID)?.session != null;
 }
 
 /**
