@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-08T03:37:10"
+updated: "2026-10-09T00:52:07"
 ---
 
 <!-- compiled_truth -->
@@ -508,4 +508,22 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "RSS 落表以最后那一轮为准：第十轮实测空闲 495 MB，单个 8 MB 安顿 +18 MB，两个并发安顿 +32 MB，在途峰值 +26 / +32 MB，100 MB 一次请求 0.3 秒。十轮的单个 8 MB 安顿增量为 +11、+26、+171、+165、+10、+18、−6、−157、+91、+18 MB（两轮为负），并发的安顿为 +147、+148、+44、−141、+99、+32 MB。连着三轮给出 −157、+91、+18 就是不断言阈值、文档只写「最近一次实测」的实证理由。"
   source: "test/rss-18.6.3.json + docs/protocol.md"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-08T06:49:52
+  kind: reversal
+  summary: "推翻「redact 走两层就够，工具参数不会嵌得更深」这条旧结论：宿主自己的 edit 参数就是 {path, edits:[{oldText,newText}]}，文件正文落在第三层，脱敏在那里之外不生效，一次远程 edit 调用把最多 1 KB 正文写进审计日志（只有 MAX_ARGS_CHARS 的截断挡着）。现在的契约是逐层走到叶子，嵌套超过 32 层整个子树换成 <max-depth>。同时记一条测试写法上的教训：原来那条单测断言 args 字段不含完整 5000 字符 payload，而该字段本来就截在 1024 字符，整段永远不可能出现，漏洞开着它也是绿的；要查就查整行日志里的一个 60 字符窗口。"
+  source: "src/audit.ts + test/bridge.test.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T00:51:51
+  kind: decision
+  summary: "渲染事件不参与判定：src/bridge.ts 里两次 emitExternalEvent 走 emitRenderEvent，构造与发送失败都吞掉。一次带副作用的调用（edit 已落盘）被报成 isError 会诱导调用方重试并重复执行写，这比渲染缺一张卡片严重得多。同一条路径的另两个约束：toolCallId 是每次调用新生成的 UUID（宿主按 id 画卡片，复用会把两次调用合成一张）；signal 与 onUpdate 传 undefined 是 v1 边界，不做取消。"
+  source: "session 2026-10-09 渲染事件与判定路径分离"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T00:52:07
+  kind: evidence
+  summary: "宿主交接那半条路径不必起宿主：AgentRegistry.register 接受任意对象作 session，resetGlobalForTests 收尾，test/host-call.test.ts 因此能断 text/image 转出、参数按引用、ctx 的 hasPendingMessages→hasQueuedMessages 改名、事件配对与 unknown tool（src/bridge.ts 分支覆盖 49%→99%）。500 的「细节只进日志」、端口退避与 EACCES 不退避、审计的两条不变式（stringify 失败仍落盘、写失败不成 unhandled rejection）、参数 1 KB 上限各有断言。变异核验 12 项，每项只红自己那条；去掉参数截断时原先全绿，这条是被变异发现的。刻意不补单测的三处：/blob 路由分派、auditBlob、src/blob.ts，宿主探针 32 项已在跑真字节进文件系统，单测里再造假磁盘只是写两遍。"
+  source: "session 2026-10-09 单测补齐三处空白"
   affects: [a2a-mcp-bridge]
