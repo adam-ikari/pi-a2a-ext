@@ -4,12 +4,25 @@
  * negotiation, and session-map bounds. Real-host behavior is test/smoke.ts.
  */
 import { describe, expect, spyOn, test } from "bun:test";
+import { connect } from "node:net";
 import type { BridgeDeps } from "../src/server.ts";
 import { MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
 
 const JSON_HDR = { "content-type": "application/json" };
 const TOKEN = "test-token";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
+
+/** Open a socket the server cannot hand to its request pool, to read the listener alone. */
+function canConnect(port: number): Promise<boolean> {
+	return new Promise((resolve) => {
+		const sock = connect(port, "127.0.0.1");
+		sock.once("connect", () => {
+			sock.destroy();
+			resolve(true);
+		});
+		sock.once("error", () => resolve(false));
+	});
+}
 
 // Injectable clock: lets TTL tests move time without sleeping.
 let clock = Date.now();
@@ -376,5 +389,53 @@ describe("server internal errors", () => {
 		await expect(startServer({ port: 1, host: "127.0.0.1", token: TOKEN }, makeDeps())).rejects.toThrow(
 			/permission denied/,
 		);
+	});
+});
+
+describe("releasing the port", () => {
+	test("a call already in flight still answers; new connections are refused", async () => {
+		// Main going away releases the port, and a tools/call can be mid-flight at that
+		// exact moment. A forced stop severs it: the client gets a socket reset and the
+		// audit loses the `done` half of a call that the host already paid for. The
+		// reading this pins is the asymmetry Bun gives without `force` — no new
+		// connections, but the one in flight gets to finish and be recorded.
+		const deps = makeDeps();
+		let entered = false;
+		const s = await startServer(
+			{ port: 0, host: "127.0.0.1", token: TOKEN },
+			{
+				...deps,
+				async callTool(name, args, sid) {
+					entered = true;
+					await new Promise((r) => setTimeout(r, 300));
+					return deps.callTool(name, args, sid);
+				},
+			},
+		);
+		const base = `http://127.0.0.1:${s.port}/`;
+		expect(await canConnect(s.port)).toBe(true); // the reading below has to be capable of true
+		const sid = await init(base);
+		const hdr = { ...AUTH, "mcp-session-id": sid };
+		const inFlight = post(
+			base,
+			{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "echo", arguments: { n: 1 } } },
+			hdr,
+		);
+		for (let waited = 0; !entered; waited += 10) {
+			if (waited > 5_000) throw new Error("callTool never ran");
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		s.stop();
+		const res = await inFlight;
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { result?: { content?: [{ text?: string }] } };
+		expect(body.result?.content?.[0]?.text).toContain("echo saw");
+		// The listener is gone for anyone who has to open a connection. Measured with a
+		// raw connect on purpose: Bun 1.3.14 does NOT close a socket that was already
+		// open when the stop happened, so a fetch from the same client pool still gets
+		// served (its `closeIdleConnections()` returns undefined and changes nothing).
+		// That lingering half is a Bun gap, not something to assert in favour of — the
+		// reading that matters here is that nothing new can attach.
+		expect(await canConnect(s.port)).toBe(false);
 	});
 });
