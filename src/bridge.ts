@@ -27,11 +27,31 @@ function toInputSchema(parameters: TSchema): Record<string, unknown> {
 }
 
 /**
+ * The tool set the bridge serves.
+ *
+ * `tools/list`, the exposure gate and `tools/call` have to answer out of one
+ * registry, or the bridge advertises names it refuses and refuses names it
+ * advertised. That registry is the Main session's own — `runHost` resolves names
+ * against it per call, and the host wires `pi.getAllTools()` to the runner's own
+ * session (`runtime-init.ts:126`), which is only the same thing while the pinned
+ * runner *is* Main's.
+ *
+ * The fallback is for the window where `AgentRef.session` is `null` (parked or
+ * aborted): the port goes at the `session_shutdown` that follows, but not
+ * instantaneously, and an empty catalog there would report a registry the host
+ * still has.
+ */
+function servedTools(pi: ExtensionAPI) {
+	const session = AgentRegistry.global().get(MAIN_AGENT_ID)?.session;
+	return session?.getAllToolInfos() ?? pi.getAllTools();
+}
+
+/**
  * Build the tools/list catalog: the host session's registry, verbatim.
  *
- * No filtering. `pi.getAllTools()` is the whole registered set, including
- * `hidden` tools and tools the host currently has disabled for its own model —
- * the bridge does not second-guess that. Execution goes through the host's own
+ * No filtering. `servedTools` is the whole registered set, including `hidden`
+ * tools and tools the host currently has disabled for its own model — the bridge
+ * does not second-guess that. Execution goes through the host's own
  * tools (see buildCallTool), so the host's permission model decides what
  * actually happens to a call.
  *
@@ -43,7 +63,7 @@ export function buildToolCatalog(pi: ExtensionAPI): () => Promise<McpTool[]> {
 	const schemaCache = new WeakMap<object, Record<string, unknown>>();
 	return async () => {
 		const out: McpTool[] = [];
-		for (const t of pi.getAllTools()) {
+		for (const t of servedTools(pi)) {
 			const params = t.parameters;
 			const key = typeof params === "object" && params !== null ? params : null;
 			let inputSchema = key ? schemaCache.get(key) : undefined;
@@ -162,7 +182,9 @@ export function buildCallTool(
 	const run = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
 		// One message for "not registered" and "not in catalog": a caller holding
 		// the token learns nothing about which names exist behind the curtain.
-		if (!pi.getAllTools().some((t) => t.name === name)) {
+		// Same registry as the catalog, so a name the caller read in `tools/list` is a
+		// name this can act on.
+		if (!servedTools(pi).some((t) => t.name === name)) {
 			return { content: [{ type: "text", text: `tool '${name}' is not exposed by this bridge` }], isError: true };
 		}
 		return runHost(name, args);
