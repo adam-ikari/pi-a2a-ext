@@ -557,3 +557,20 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   summary: "「还有没有 Main 可服务」按宿主的哨兵判：AgentRef.session 的类型是 AgentSession | null，注释写着 Null exactly when parked/aborted，所以 hasMainSession() 用 != null 而不是 !== undefined。理由是同一条调用路径（buildCallTool 里 if (!ref?.session)）本来就拒绝这个状态并回 main session not available，两处读同一个字段必须得出同一个结论，否则释放规则说「有 Main，留着端口」而执行说「没有」。随之确立：入口的绑定与释放都以「能不能真的服务」为准，不以槽位是否存在为准。冷启动安全性按宿主源码核对：Main 在 createAgentSession 里预注册（session: null）、构造结束时 attachSession 附上活会话，而 tui / rpc / print 三个模式都是在会话建好之后才 emit session_start（runtime-init.ts:212、extension-ui-controller.ts:320-329），所以绑完之后的复查挡不到正常启动。宿主核验探针只跑 --mode rpc，tui 与 print 那一半是源码核对，不是实测。"
   source: "node_modules/@oh-my-pi/pi-coding-agent/src/registry/agent-registry.ts:69 · src/bridge.ts:108"
   affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T03:10:20
+  kind: evidence
+  summary: "释放端口的动作换成非强制 server.stop()（原为 stop(true)）。强制那一半实测：在途请求拿到 ECONNRESET、服务端 handler 抛「The connection was closed.」，tools/call 的审计只剩 start 行，而 /blob 因为 body 先整个 buffer 住才写（src/blob.ts:113），断在半路就是文件没动、auditBlob 也没跑——一次上传无迹可查地消失。非强制那一半实测：监听立刻关（裸 TCP connect 即 ECONNREFUSED），在途那一次照常 200 并落完整审计"
+  source: "src/server.ts:251-258, test/server.test.ts「releasing the port」"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T03:10:36
+  kind: evidence
+  summary: "Bun 1.3.14 的非强制 stop() 不关释放时已经空闲的 keep-alive 套接字：释放后用同一 HTTP 客户端连接池再发一条请求仍被服务（实测到 3 秒以后），而裸 node:net 新建连接一律 ECONNREFUSED；closeIdleConnections() 在这个版本只有函数名，调用返回 undefined 且 socket 照旧。bun-types 1.4.2 写的「空闲连接立刻关、stop() 返回在所有连接关闭时 resolve 的 Promise」是更新版本的行为。于是「释放后不接受连接」这句话的核验只能用新建连接判，不能走 fetch——后者量到的是这根旧 socket"
+  source: "本机实测 /tmp/stopprobe（Bun 1.3.14 与 node_modules/bun-types 1.4.2）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T03:10:46
+  kind: decision
+  summary: "端口释放的取舍定为「保住审计，接受旧连接多活一会儿」：释放那一刻若切断在途请求，/blob 会留下一条既没落盘也没记录的上传，而这条路径本来就在宿主审批门之外，审计是它唯一的痕迹。反过来用非强制 stop() 付出的代价是那根早已连上的 socket 可能继续被服务（Bun 的缺口，不在这里补 closeIdleConnections 的替身——自己记连接数再择机关断是长第二套系统）。判据仍是「新建连接被拒」"
+  affects: [src/server.ts, test/server.test.ts]
