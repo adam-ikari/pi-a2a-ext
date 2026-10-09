@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
 import { auditLogPath } from "../src/audit.ts";
-import { buildCallTool } from "../src/bridge.ts";
+import { buildCallTool, hasMainSession } from "../src/bridge.ts";
 
 const savedEnv = { ...process.env };
 let auditDir: string;
@@ -289,5 +289,30 @@ describe("buildCallTool when the host cannot take the render event", () => {
 		const r = await h.call("read", {});
 		expect(r.content).toEqual([{ type: "text", text: "permission denied by host" }]);
 		expect(r.isError).toBe(true);
+	});
+});
+
+describe("hasMainSession", () => {
+	// The entrypoint decides a process-level server's fate on this one reading, so it is
+	// checked against the real registry instead of being stubbed out.
+	test("false while the global registry holds no Main session", () => {
+		expect(hasMainSession()).toBe(false);
+	});
+
+	test("true for the mounted fake Main, false once the registry is reset", () => {
+		mount({});
+		expect(hasMainSession()).toBe(true);
+		AgentRegistry.resetGlobalForTests();
+		expect(hasMainSession()).toBe(false);
+	});
+
+	test("a Main slot with no session behind it does not count", () => {
+		AgentRegistry.global().register({
+			id: MAIN_AGENT_ID,
+			displayName: "no-session",
+			kind: "main",
+			session: undefined as never,
+		});
+		expect(hasMainSession()).toBe(false);
 	});
 });
