@@ -249,7 +249,12 @@ export async function startServer(
 		port: server.port ?? cfg.port,
 		fellBack,
 		stop() {
-			server.stop(true);
+			// Not `stop(true)`: the port is released when Main goes away, and a
+			// tools/call can be mid-flight at that moment. Forcing it severs the
+			// socket — the client gets ECONNRESET and the audit loses the `done`
+			// half of a call the host already paid for. A graceful stop refuses new
+			// connections all the same and lets this one answer.
+			server.stop();
 		},
 	};
 }
