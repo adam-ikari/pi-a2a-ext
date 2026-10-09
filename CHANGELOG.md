@@ -17,6 +17,16 @@
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
 
+## 2026-10-09 — 目录、暴露门与执行，原先读三份注册表
+
+- fix: **`tools/list` 与暴露门读的是入口 pin 住那份 `pi`，而执行读 `Main` 的活会话**。宿主把 `pi.getAllTools()` 接到那套 runner **自己的**会话（`runtime-init.ts:126`、`acp-agent.ts:2581` 都是 `() => session.getAllToolInfos()`），入口却只认第一个 `session_start`——task 子代理或 ACP 会话先走到，桥就在报出另一个会话的工具清单，同时把 `Main` 自己的名字按「not exposed」拒掉；反方向也成立，`Main` 有而那份 runner 没有的名字列不出来却其实能调。现在这一处只有一个权威（`src/bridge.ts` 的 `servedTools()`）：读 `Main` 会话的 `getAllToolInfos()`，目录与门都改读它，常规宿主里它与原先那份 `pi` 逐字相同；`AgentRef.session` 为 `null`（parked/aborted 到端口释放之间）时退回那份 `pi`，因为报出一份宿主其实并没有的空注册表不是诚实而是添乱
+- test: `test/host-call.test.ts` +2（17 → 19，单测 102 → 104）。harness 多一个 `pinnedPiNames` 把「入口那套 runner 不是 Main」摆出来，假 `Main` 会话补上 `getAllToolInfos` 与 `getToolByName` 同源。新增的第一项三个方向都断，先红在目录那半；第二项断 parked 的兜底
+- 变异核验三项：两处都换回 `pi.getAllTools()`（红那一项）、只改目录而门仍读 `pi`（红同一项的另半条断言，两处分别被断着）、去掉 parked 的兜底（红五项——新增的兜底项，加 `test/bridge.test.ts` 里三条依赖「没有 Main 就读入口那份」的目录测试与「registered tool with no Main session」那条）
+- 顺带修一处过期的计数：`docs/testing.md` 那节标题写着 14 项，实际早就不是了
+- docs: 协议页 `tools/list` 那条改口到真正的权威并写清兜底的适用窗口，README 中英两版的目录、安全与边界、模块表三处加 mermaid 标签同步
+- 计数同步：单测计数落到 104（README 中英、站点摘要、`docs/testing.md` 总览）；协议页的内存表按 `test:blob` 第十八轮重落（空闲 497 MB，单个 8 MB 上传安顿 +17 MB，两个并发安顿 +45 MB，在途峰值 +0 / +58 MB——这一轮的峰值低于安顿，正说明这两个数不能互相排序；近六轮基线 484、474、461、490、480、497 MB，跨度 36 MB）
+- 回归：`lint` / `tsc` / `bun test` 104/104；六个宿主核验在最后一次改动之后重跑全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 32 项、`SCENARIOS 54 steps, 0 failed`、`VERDICT: B`、`PACKAGE OK`），其中 `tools/list` 非空与远程调用走的就是这份新读数
+
 ## 2026-10-09 — 释放端口那一刻，在途的那一次要落审计
 
 - fix: **释放端口把正在处理的那一次一刀切断**。`src/server.ts` 的 `stop()` 是 `server.stop(true)`，而端口会在三个时刻释放：`session_shutdown` 看见注册表里没有活的 `Main`、绑定中途那次放弃、启动失败的 catch。任一个时刻都可能正有一个请求在处理。代价分两种：`tools/call` 那一边客户端拿到 `ECONNRESET`、审计只剩 `start` 那一行；`POST /blob` 是整个消失，body 还没收完就断，`Buffer.from(await req.arrayBuffer())` 抛在写之前，于是文件没动、`auditBlob` 也没跑到——而那个端点走的正是宿主审批门之外的路，审计是它唯一的痕迹。改成非强制的 `server.stop()`：监听立刻关，后来的人一律被拒，已经进来的那一次处理完、返回、落审计

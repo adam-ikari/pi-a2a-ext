@@ -4,7 +4,7 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 102 pass / 0 fail（8 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 104 pass / 0 fail（8 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
@@ -125,7 +125,7 @@
 
 覆盖率给出的线索有个共同形状：注释里写了承诺，测试里没有对应的断言。三处都补了，其中一处补的时候改出一处实现缺陷。
 
-### 宿主交接那半条路径（`test/host-call.test.ts`，14 项）
+### 宿主交接那半条路径（`test/host-call.test.ts`，19 项）
 
 `buildCallTool` 分两半。暴露门那半早有单测，把调用交给 Main 会话的那半一行 deterministic 测试都没有：它只在 `test:smoke` 里跑过，而探针在那儿能调的工具只返回文本块。`AgentRegistry.register` 接受任何对象作 `session`，`resetGlobalForTests` 就是为这种用法留的，于是这半条路径不必起宿主。
 
@@ -160,6 +160,16 @@
 同一批实测里还有一条 Bun 的缺口，记在这里是为了别把它当成已解决：非强制 `stop()` 不关释放时已经空闲的 keep-alive 套接字，`closeIdleConnections()` 在 1.3.14 只有函数名（返回 `undefined`，socket 照旧服务），`bun-types` 1.4.2 描述的「空闲连接立刻关」是更新版本的行为。所以断言「释放后不接受连接」不能走 HTTP 客户端——它会复用那根老 socket，量到的是这一半而不是监听的状态；这里用 `node:net` 裸连，并在同一条测试里先断它在释放前为 true，免得这个读数只会恒假。
 
 变异两项：把 `stop(true)` 换回去，只红这一条，18 ms 内以 `ECONNRESET` 红；把 `server.stop()` 整个删掉，红五条——这条的裸连接断言，加入口那四条靠新建连接判释放的。
+
+## 目录、暴露门与执行，原先读三份注册表
+
+`buildToolCatalog` 与 `buildCallTool` 里那道暴露门都读入口 pin 住的那份 `pi.getAllTools()`，而执行每次现取注册表里 `Main` 会话的 `getToolByName`。宿主把 `pi.getAllTools()` 接到的是**那套 runner 自己的会话**（`runtime-init.ts:126`、`acp-agent.ts:2581` 都是 `() => session.getAllToolInfos()`），所以只要第一个 `session_start` 不是 `Main` 的——task 子代理与 ACP 会话都可能先走到——桥就在报出另一个会话的工具清单，同时把 `Main` 自己的名字按「not exposed」拒掉。反过来说也一样：`Main` 有而那份 runner 没有的名字，列不出来却其实能调。
+
+改法是让这一处只有一个权威：`src/bridge.ts` 里新增 `servedTools()`，读 `Main` 会话的 `getAllToolInfos()`（宿主接 `pi.getAllTools()` 用的就是这个函数，所以常规情况下两个读数逐字相同），目录与暴露门都改读它；`AgentRef.session` 是 `null`（parked/aborted，端口还没释放的那一段）时退回那份 `pi`，因为此时报出一份宿主其实并没有的空注册表不是诚实而是添乱。于是「列出来却调不动」只剩两次读之间工具被注销这一种情形，那条断言还在。
+
+核验落在 `test/host-call.test.ts`：harness 多一个 `pinnedPiNames`，用来把「入口那套 runner 不是 Main」这件事摆出来；假 `Main` 会话现在带 `getAllToolInfos`，与 `getToolByName` 同源。新增两项，第一项三个方向都断（目录只列 `Main` 的、`Main` 的名字照常执行、另一个会话的名字在门就被拒），第二项断 parked 时退回入口视图。第一项先红：目录交出的是那份 `pi` 的清单。
+
+变异三项：两处都换回 `pi.getAllTools()`，红那一项；只改目录、门仍读 `pi`，红同一项（红在门那半条断言，说明两处分别被断着）；去掉 parked 的兜底，红五项——新增那两项里的兜底一项，加 `test/bridge.test.ts` 里三条依赖「没有 Main 就读入口那份」的目录测试与「registered tool with no Main session」那条。六个宿主核验重跑全绿，其中 `test:install` 的「`tools/list` 非空」与 smoke、scenario 的远程调用，走的就是这份新读数。
 
 ## 入口那一层（`test/entry.test.ts`，19 项）
 

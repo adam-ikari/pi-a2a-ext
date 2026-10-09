@@ -35,7 +35,7 @@ graph TB
     subgraph Host["🏠 host omp (MCP server)"]
         direction TB
         Serve["⚙️ src/server.ts<br/>Bun.serve · auth + protocol<br/>tools/list · tools/call"]
-        Bridge["🌉 src/bridge.ts<br/>pi.getAllTools() · Main session"]
+        Bridge["🌉 src/bridge.ts<br/>Main session registry"]
         Tools["🛠️ host's real tools<br/>read · bash · edit"]
 
         Serve -->|"getToolByName().execute()"| Bridge
@@ -54,7 +54,7 @@ graph TB
 
 - The extension starts `Bun.serve` on `session_start` and implements MCP `2025-11-25`'s `initialize` / `tools/list` / `tools/call`, answering with plain JSON (no SSE).
 - The endpoint is one per **process**; the host's `session_start` / `session_shutdown` are one per **session** (a task subagent's runner, an ACP session, a persisted revive each get their own). A later `session_start` reuses the running server (two in flight at once bind only one endpoint), and a `session_shutdown` only releases the port once the host registry holds no live `Main` session (`AgentRef.session` is null exactly when it is parked or aborted, and `tools/call` already refuses that state) — otherwise any subagent finishing would take the endpoint down with it. A shutdown that lands mid-bind has no port to stop yet, so the start re-reads the registry when the bind finishes and gives up what it just bound if `Main` is gone. Releasing uses a non-forced `stop()`: the listener closes at once and new connections are refused, while a request already in flight finishes and gets its audit pair — a forced close would leave a `tools/call` with half its record and a `POST /blob` with none.
-- The tool catalog comes from the host's current session (`pi.getAllTools()`); execution always routes to `getToolByName` on the host's `Main` session, so calls run the host's own tool implementations.
+- The catalog, the exposure gate and execution read one registry: the host's `Main` session (`getAllToolInfos()`, which is exactly what the host wires `pi.getAllTools()` to). Execution then resolves the name through that same session's `getToolByName`. With no live `Main` (parked or aborted, before the port is released) the catalog falls back to the runner the entry is pinned to instead of reporting an empty registry.
 - The catalog is the host registry as-is; the bridge does not filter it (see [Security and boundaries](#security-and-boundaries)).
 - Remote calls involve no model inference at all: the host only receives a request, runs a tool, and returns the result.
 
@@ -231,7 +231,7 @@ The listing is decided by the host at runtime — it depends on which extensions
 ## Security and boundaries
 
 - **The token is full tool-execution authority (under the default config)**: the host's default `approvalMode: yolo` means anyone holding the token can execute any exposed tool (including `bash`) directly in the host session with no approval step; only tools the host configures as `prompt` have a gate that can stop them (see [Approval](#approval) for the no-UI case). Keep the config file at `0600` and out of version control.
-- **The bridge makes no permission decision**: `tools/list` is the host session's registry (`pi.getAllTools()`), passed through verbatim with no filtering. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
+- **The bridge makes no permission decision**: `tools/list` is the host's `Main` session registry (`getAllToolInfos()`), passed through verbatim with no filtering. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
 - **Execution goes through the host's native tools**: `tools/call` routes to `getToolByName().execute()` on the host's `Main` session with the real `session.settings` and `ExtensionContext ui` injected, so the host's approval gate (`ExtensionToolWrapper`) applies as usual. The bridge implements no approval logic of its own.
 - **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list`; aliases (such as `xd://bash`) and unregistered names are refused, and a refusal does not distinguish "filtered" from "nonexistent" (so it does not leak whether a name exists).
 - **`POST /blob` is the exception, and it does not pass the host approval gate.** It takes raw bytes (skipping base64) and writes them directly, resolving the path itself — so it can write **anywhere the host process can write, with no root and no allowlist**. That is deliberate: an extension cannot raise an approval request of its own (`ExtensionAPI` only offers `on("tool_approval_requested", …)`, which is the host asking and the extension answering), and the one way to write through the gate is a `tools/call` — the very encoding `/blob` exists to avoid. Auditing still happens, tagged `tool: "blob:write"` with `path`/`offset`/`bytes` in args and never the file contents. See [docs/protocol.md](docs/protocol.md).
@@ -278,7 +278,7 @@ bun install
 
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
-bun test              # unit tests: test/*.test.ts (102: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
+bun test              # unit tests: test/*.test.ts (104: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 35 items (needs a local omp)
 bun run test:blob      # POST /blob raw-byte upload, 32 items (needs a local omp)
@@ -298,7 +298,7 @@ File layout:
 | --- | --- |
 | `extensions/a2a-bridge.ts` | Extension entry point: starts the server on `session_start`, registers `/a2a` |
 | `src/server.ts` | `Bun.serve` + JSON-RPC (MCP 2025-11-25, plain JSON responses), sessions and version negotiation |
-| `src/bridge.ts` | Tool catalog and execution (`pi.getAllTools` / AgentRegistry Main session), exposure-intersection decision |
+| `src/bridge.ts` | Tool catalog and execution (both through the AgentRegistry `Main` session, with the pinned `pi.getAllTools` only as the no-live-Main fallback), exposure-intersection decision |
 | `src/config.ts` | Config load/save, field validation, token generation |
 | `src/auth.ts` | Bearer token verification (timing-safe comparison) |
 | `src/audit.ts` | Audit log for remote calls (two-phase JSONL `start`/`done`, rotation) |
