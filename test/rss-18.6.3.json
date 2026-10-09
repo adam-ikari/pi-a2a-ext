@@ -1,15 +1,15 @@
 {
 	"hostVersion": "18.6.3",
-	"measuredAt": "2026-10-08",
+	"measuredAt": "2026-10-09",
 	"probeBodyMB": 8,
 	"hundredMBStatus": 200,
-	"idleMB": 490,
-	"peakOneUploadMB": 522,
-	"peakTwoConcurrentMB": 523,
-	"settledAfterOneMB": 499,
-	"settledAfterTwoMB": 506,
-	"peakDeltaOneMB": 32,
-	"peakDeltaTwoMB": 33,
-	"settledDeltaOneMB": 8,
-	"settledDeltaTwoMB": 15
+	"idleMB": 567,
+	"peakOneUploadMB": 619,
+	"peakTwoConcurrentMB": 618,
+	"settledAfterOneMB": 601,
+	"settledAfterTwoMB": 618,
+	"peakDeltaOneMB": 53,
+	"peakDeltaTwoMB": 52,
+	"settledDeltaOneMB": 34,
+	"settledDeltaTwoMB": 52
 }

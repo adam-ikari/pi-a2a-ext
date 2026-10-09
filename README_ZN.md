@@ -50,6 +50,7 @@ graph TB
 ```
 
 - 扩展在 `session_start` 时启动 `Bun.serve`，实现 MCP `2025-11-25` 的 `initialize` / `tools/list` / `tools/call`，响应为纯 JSON（无 SSE）。
+- 端点是**每进程**一个，而宿主的 `session_start` / `session_shutdown` 是**每会话**一个（task 子代理、ACP 会话、持久化 revive 各有自己一套 handler）。后来的 `session_start` 复用已起的服务器；`session_shutdown` 只在宿主注册表里没有 `Main` 会话时才释放端口，否则任何一次子代理结束都会把还在服务的端口拆掉。
 - 工具目录来自宿主当前会话（`pi.getAllTools()`），执行固定路由到宿主 `Main` 会话的 `getToolByName`，因此走的是宿主原生工具实现。
 - 目录就是宿主注册表本身，桥不过滤（见「安全与边界」）。
 - 远程调用不经过任何模型推理：宿主只做「收请求 → 跑工具 → 回结果」。
@@ -260,7 +261,7 @@ bun install
 
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
-bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/宿主交接/审计/版本守卫）
+bun test              # 单测：test/*.test.ts（98 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，35 项（需本机 omp）
 bun run test:blob      # POST /blob 原始字节上传，32 项（需本机 omp）

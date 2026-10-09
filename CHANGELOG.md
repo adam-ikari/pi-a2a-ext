@@ -17,6 +17,18 @@
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
 
+## 2026-10-09 — 每会话的事件，每进程的端口
+
+- fix: **任何一次子代理结束都会拆掉还在服务的端口**。`extensions/a2a-bridge.ts` 把 `server?.stop()` 挂在 `session_shutdown` 上，而这个事件是**每会话**的：宿主为 task 子代理、ACP 会话、持久化 revive 各建一套 extension runner 并重跑扩展工厂（模块图不重新求值，`server`/`cfg` 因此共享），一个 task 子代理跑完，它的 `session_shutdown` 落到同一个 handler，端口释放，而主会话那边再没有第二个 `session_start` 把它重启。现在的判据是宿主注册表里还有没有 `Main` 会话（`src/bridge.ts` 的 `hasMainSession()`）：有就照常服务，没有才收。交互式宿主的 `/new` 不在此列——它复用同一个 runner，根本不重发 `session_start`
+- fix: **`/a2a rotate` 先改内存再写文件**，写失败就是运行中的桥换了 token、配置文件留着旧 token、操作者收到一句「失败」。改成先落盘再生效
+- 顺带记下启动失败那条注释（「不留半初始化状态」）现在有据可查：catch 里的 `stop()` 与清状态两半各有断言，只清 `cfg` 而留着 `server` 那种改法红不了——挡住 `rotate` 的是两个条件里任一个，这条保护本来就写在注释里，现在写在测试里
+- test: 新增 `test/entry.test.ts`（16 项，单测 79 → 95）。入口此前没有任何单测能引到它。不 mock 任何模块：`$A2A_BRIDGE_CONFIG` 指临时文件、端口写 `0`、`Main` 是真注册进 `AgentRegistry.global()` 的假货，每条断言都是「从广播里解析出端口，然后去连它」——200 就是在服务，连不上就是没在服务。`mock.module` 试过，也不行：Bun 的模块 mock 是进程级的，同一进程里 `test/config.test.ts` 的 `loadConfig` 会被换掉，`bun test` 整个绿不回来
+- test: `test/host-call.test.ts` +3（14 → 17，单测 95 → 98），`hasMainSession()` 对着真注册表测三种情形：空表、`Main` 在册、`Main` 在册但背后没有会话。入口那条判断就靠这个读数，所以它不能被 stub
+- 变异核验七项：去掉 `hasMainSession()` 那道闸（红 1 项）、`rotate` 的赋值挪回写盘之前（1）、catch 里不再 `stop()`（1）、catch 里什么都不清（1）、`hasMainSession()` 恒真（红的正是真注册表那 3 项）与恒假（1）。最后一条是广播里改用配置的端口：红 7 项——端口报错了，所有「去连它」的断言一起塌，这条恰恰证明断言是连着真端口写的
+- docs: 协议页新增「一个进程，一套端口」，把后来的 `session_start` 静默复用、审批归属第一份 `ctx`（子代理那份没有可用 UI，让它占住引用会一路挂住）、`Main` 没了才释放三条写清；README 中英两版各加一条
+- 计数同步：README 中英两版的 `bun test` 说明加 98 项与两组新覆盖面，站点 testing 摘要同步；内存表按第十二轮实测重落（空闲 567 MB，单个 8 MB 安顿 +34 MB，两个并发 +52 MB，在途峰值 +53 / +52 MB），并记下基线自己一轮就从 490 MB 走到 567 MB
+- 回归：`lint` / `tsc` / `bun test` 98/98；宿主核验五连全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 32 项、`SCENARIOS 54 steps, 0 failed`、`VERDICT: B`），其中场景核验的「宿主结束 → 端口不再接受连接」正是这条改动的反例位
+
 ## 2026-10-09 — 渲染事件不该决定一次调用的结果
 
 - fix: **宿主拒绝渲染事件时，一次已经执行完的写会被报成失败**。`src/bridge.ts` 里那两次 `emitExternalEvent` 坐在判定结果的 `try` 中。三种后果：start 被拒则工具根本不执行；end 被拒则 `edit` 照常落盘而调用方拿到 `isError`，照着它重试就重复执行一次带副作用的写；工具本身抛错时交出去的错误文本被换成渲染自己的那一条。注释写的是「只驱动渲染」，代码没做到。现在事件的构造与发送失败都吞掉，成功与失败两条路合到同一处结果映射，`toInputSchema` 那类降级照旧
