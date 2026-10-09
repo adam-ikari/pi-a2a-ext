@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-09T00:52:07"
+updated: "2026-10-09T01:39:44"
 ---
 
 <!-- compiled_truth -->
@@ -526,4 +526,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "宿主交接那半条路径不必起宿主：AgentRegistry.register 接受任意对象作 session，resetGlobalForTests 收尾，test/host-call.test.ts 因此能断 text/image 转出、参数按引用、ctx 的 hasPendingMessages→hasQueuedMessages 改名、事件配对与 unknown tool（src/bridge.ts 分支覆盖 49%→99%）。500 的「细节只进日志」、端口退避与 EACCES 不退避、审计的两条不变式（stringify 失败仍落盘、写失败不成 unhandled rejection）、参数 1 KB 上限各有断言。变异核验 12 项，每项只红自己那条；去掉参数截断时原先全绿，这条是被变异发现的。刻意不补单测的三处：/blob 路由分派、auditBlob、src/blob.ts，宿主探针 32 项已在跑真字节进文件系统，单测里再造假磁盘只是写两遍。"
   source: "session 2026-10-09 单测补齐三处空白"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T01:39:24
+  kind: decision
+  summary: "服务器是每进程的资源，宿主给的 session_start / session_shutdown 是每会话的（task 子代理、ACP 会话、持久化 revive 各建一套 runner 并重跑扩展工厂，模块图不重新求值所以 server/cfg 共享）。契约定为：第一个 session_start 绑定并广播，后来的静默复用（审批与通知因此归属第一份 ctx，子代理那份没有可用 UI，让它占住引用会一路挂住）；session_shutdown 只在 src/bridge.ts 的 hasMainSession() 说没有 Main 会话时才释放端口。旧的无条件 stop 是缺陷：一次子代理结束就拆掉还在服务的端口，而主会话不再发 session_start。rotate 同决定：先生效后落盘的顺序反过来，先 saveConfig 再改 cfg.token，写失败时运行中的桥仍用旧 token。"
+  source: "host sources: modes/runtime-init.ts:212, extensibility/extensions/runner.ts:440-449, sdk.ts loader 重跑工厂 + test/entry.test.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T01:39:44
+  kind: evidence
+  summary: "入口层可单测，且不靠 mock：$A2A_BRIDGE_CONFIG 指临时文件、端口写 0、Main 是真注册进 AgentRegistry.global() 的假货，每条断言都从广播文本里解析端口再去连它（200 = 在服务，连不上 = 没在服务）。反面结论：Bun 的 mock.module 是进程级的，用它 stub server/config/bridge 会让同一进程里 test/config.test.ts 的真 loadConfig 被换掉，12 项红掉——所以这条路由只能走真依赖。test/entry.test.ts 16 项 + test/host-call.test.ts 的 hasMainSession 3 项（对真注册表测空表/在册/在册但无会话，入口的判断就靠这个读数，不能被 stub），单测 79 → 98。变异核验七项：拆闸、rotate 顺序、catch 不 stop、catch 不清状态、hasMainSession 恒真（红真注册表那 3 项）与恒假各 1，广播改用配置端口那项红 7 项。"
+  source: "test/entry.test.ts + session 2026-10-09 入口生命周期"
   affects: [a2a-mcp-bridge]
