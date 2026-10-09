@@ -574,3 +574,14 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "端口释放的取舍定为「保住审计，接受旧连接多活一会儿」：释放那一刻若切断在途请求，/blob 会留下一条既没落盘也没记录的上传，而这条路径本来就在宿主审批门之外，审计是它唯一的痕迹。反过来用非强制 stop() 付出的代价是那根早已连上的 socket 可能继续被服务（Bun 的缺口，不在这里补 closeIdleConnections 的替身——自己记连接数再择机关断是长第二套系统）。判据仍是「新建连接被拒」"
   affects: [src/server.ts, test/server.test.ts]
+
+- time: 2026-10-09T04:49:11
+  kind: evidence
+  summary: "宿主把 ExtensionAPI 的 pi.getAllTools() 接到的是「这套 runner 自己的会话」：三个接线点都是 () => session.getAllToolInfos()（runtime-init.ts:126、extension-ui-controller.ts:199/427、acp-agent.ts:2581）。所以入口 pin 住第一份 session_start 的 pi，就等于把目录与暴露门绑在那套 runner 的会话上；task 子代理或 ACP 会话先到，那份注册表就不是 Main 的，而执行仍是每次现取 Main——同一个桥里三个读者、两份权威"
+  source: "node_modules/@oh-my-pi/pi-coding-agent/src/modes/runtime-init.ts:126, src/modes/acp/acp-agent.ts:2581, session/agent-session.ts getAllToolInfos"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T04:49:11
+  kind: decision
+  summary: "目录、暴露门、执行统一读 Main 会话的 getAllToolInfos()（src/bridge.ts 的 servedTools()），常规宿主里它与原先那份 pi.getAllTools() 逐字相同（同一个函数的两个接线点）；AgentRef.session 为 null（parked/aborted 到端口释放之间）退回入口那份 pi，不报空注册表。取舍理由与 AGENTS.md 一致：桥不该有第二份名单，连「工具集合」这份名单也不该有——它应当就是宿主执行时解析的那一份"
+  affects: [src/bridge.ts, test/host-call.test.ts]
