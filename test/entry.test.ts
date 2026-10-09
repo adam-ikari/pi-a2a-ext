@@ -216,6 +216,22 @@ describe("session_start", () => {
 		expect(texts(r)).toContain(`token ${saved.token.slice(0, 6)}…`);
 	});
 
+	test("two session_starts in flight bind one server, not two", async () => {
+		// The host awaits each runner's emit on its own async path, so a subagent's
+		// session_start can land while the Main session's is still inside loadConfig.
+		const main = newRunner();
+		const sub = newRunner();
+		await Promise.all([main.start(), sub.start()]);
+		const bound = main.advertisedPort();
+		expect(bound).not.toBeNull();
+		expect(sub.advertisedPort()).toBeNull();
+		AgentRegistry.resetGlobalForTests();
+		await main.shutdown();
+		// The leak is the point: a second bound server is stopped by nobody, because the
+		// module only remembers the last one.
+		expect(await ping(bound as number)).toBeNull();
+	});
+
 	test("a start that fails after binding leaves no half-initialized state", async () => {
 		// The announce step throws. Before the catch cleared the module state, `a2a rotate`
 		// reported success for a server nobody could reach.
@@ -253,6 +269,25 @@ describe("session_shutdown", () => {
 		expect(await ping(port as number)).toBeNull();
 		await r.command("status");
 		expect(texts(r)).toContain("A2A bridge not running");
+	});
+
+	test("a shutdown landing mid-bind leaves no orphan endpoint", async () => {
+		const main = newRunner();
+		// Fire the start and let it yield inside `loadConfig`: the bind is still in
+		// flight, so the shutdown below sees `server` as null and has nothing to stop.
+		const inFlight = main.start();
+		AgentRegistry.resetGlobalForTests();
+		await main.shutdown();
+		await inFlight;
+		// What the aborted start must not do is keep a port that already serves nobody:
+		// it announced nothing, and the process-level state says the bridge is not running.
+		expect(main.advertisedPort()).toBeNull();
+		await main.command("status");
+		expect(texts(main)).toContain("A2A bridge not running");
+		mountMain();
+		const next = newRunner();
+		await next.start();
+		expect(await ping(next.advertisedPort() as number)).toBe(200);
 	});
 
 	test("a session_start after that binds a fresh port", async () => {
