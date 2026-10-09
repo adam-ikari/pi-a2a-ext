@@ -18,15 +18,26 @@ function digest(value: string): string {
 }
 
 /**
+ * Beyond this nesting nobody is describing a tool call any more, so the subtree is
+ * omitted rather than walked. It exists to bound recursion, not to allow payloads
+ * at depth 33: reaching it at all means the caller sent something pathological.
+ */
+const MAX_REDACT_DEPTH = 32;
+
+/**
  * Redact oversized string leaves (a file's base64 body) down to a length plus
  * a short hash: the log stays a record of *what was called*, not a copy of the
- * payload. Walks two levels deep, which is as nested as tool args get.
+ * payload. This walks to every leaf, and that is the whole point — it used to stop
+ * two levels deep on the reasoning that "that is as nested as tool args get", and
+ * the host's own `edit` tool breaks it: `{path, edits: [{oldText, newText}]}` puts
+ * the file body at depth 3, so up to MAX_ARGS_CHARS of it was written verbatim.
  */
 function redact(value: unknown, depth = 0): unknown {
 	if (typeof value === "string") {
 		return value.length > MAX_VALUE_CHARS ? `<len:${value.length},sha256:${digest(value)}>` : value;
 	}
-	if (depth >= 2 || typeof value !== "object" || value === null) return value;
+	if (typeof value !== "object" || value === null) return value;
+	if (depth >= MAX_REDACT_DEPTH) return "<max-depth>";
 	if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
 	const out: Record<string, unknown> = {};
 	for (const [k, v] of Object.entries(value)) out[k] = redact(v, depth + 1);
