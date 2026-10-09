@@ -215,6 +215,31 @@ try {
 	);
 	check((statSync(auditPath).mode & 0o777) === 0o600, "audit log is 0600");
 
+	// 9a. Arg redaction through the real path. The payload nests three levels, which
+	// is the shape the host's own `edit` tool uses (`{path, edits: [{oldText}]`) and
+	// where the redactor used to stop walking. Checked off-channel, in the log: the
+	// call's own response says nothing about what got recorded.
+	const secret = "S".repeat(4000);
+	await post(
+		{
+			jsonrpc: "2.0",
+			id: 14,
+			method: "tools/call",
+			params: {
+				name: "read",
+				arguments: { path: join(tmp, "gone-secret.txt"), edits: [{ oldText: secret }] },
+			},
+		},
+		{ ...AUTH, "mcp-session-id": sid1 },
+	);
+	const redacted = await until(async () => {
+		if (!existsSync(auditPath)) return null;
+		const content = readFileSync(auditPath, "utf8");
+		return content.includes("<len:4000") ? content : null;
+	}, "audit record with the nested arg folded to length+hash");
+	check(redacted.includes("<len:4000,sha256:"), "a long string nested three levels deep is recorded as length+hash");
+	check(!redacted.includes(secret.slice(0, 60)), "the nested payload itself never reaches the audit log");
+
 	/**
 	 * 9b. Audit rotation. `MAX_LOG_BYTES` (512 KB) renames the log to `<path>.1`,
 	 * and nothing in this repo had ever crossed that line. Two properties, and they

@@ -3,7 +3,7 @@
  * auth placement, session enforcement (missing/stale/expired id), version
  * negotiation, and session-map bounds. Real-host behavior is test/smoke.ts.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { BridgeDeps } from "../src/server.ts";
 import { MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
 
@@ -301,5 +301,80 @@ describe("server protocol", () => {
 			const res = await post(base, [{ jsonrpc: "2.0", id: 1, method: "ping" }], AUTH);
 			expect(res.status).toBe(400);
 		});
+	});
+});
+
+describe("server internal errors", () => {
+	test("a failure inside the handler is a leak-free 500, and the detail goes to the log", async () => {
+		// The 500 branch promises: "Details (host paths, stack) go to the server log
+		// only". Nothing checked either half of that until now.
+		const leaked = new Error("ENOENT: /home/dev/.omp/agent/private.log");
+		const logged: unknown[][] = [];
+		const spy = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+			logged.push(a);
+		});
+		const s = await startServer(
+			{ port: 0, host: "127.0.0.1", token: TOKEN },
+			{
+				...makeDeps(),
+				async getTools() {
+					throw leaked;
+				},
+			},
+		);
+		try {
+			const base = `http://127.0.0.1:${s.port}/`;
+			const sid = await init(base);
+			const res = await post(base, { jsonrpc: "2.0", id: 7, method: "tools/list" }, { ...AUTH, "mcp-session-id": sid });
+			expect(res.status).toBe(500);
+			const text = await res.text();
+			expect(text).toContain("internal error");
+			expect(text).not.toContain("/home/dev");
+			expect(text).not.toContain("ENOENT");
+			expect(String(logged[0]?.[0])).toContain("internal error");
+			expect(logged.some((a) => a.includes(leaked))).toBe(true);
+		} finally {
+			spy.mockRestore();
+			s.stop();
+		}
+	});
+
+	test("explicit port already taken -> binds an ephemeral one and flags it", async () => {
+		// The branch only exists for a non-zero configured port, and every other test
+		// here starts on port 0 — so the fallback and the warning the extension prints
+		// from `fellBack` had no coverage.
+		const squatter = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("taken") });
+		const wanted = squatter.port as number;
+		const s = await startServer({ port: wanted, host: "127.0.0.1", token: TOKEN }, makeDeps());
+		try {
+			expect(s.fellBack).toBe(true);
+			expect(s.port).not.toBe(wanted);
+			// And the server that came back is the usable one.
+			const base = `http://127.0.0.1:${s.port}/`;
+			const sid = await init(base);
+			const res = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { ...AUTH, "mcp-session-id": sid });
+			expect(res.status).toBe(200);
+		} finally {
+			s.stop();
+			squatter.stop(true);
+		}
+	});
+
+	test("only a port conflict gets the ephemeral retry", async () => {
+		// The retry is keyed on EADDRINUSE for a reason: falling back on any bind
+		// failure would turn a misconfiguration into a silent port change. EACCES on a
+		// privileged port is what separates the two behaviours, since an ephemeral port
+		// would bind fine there — the bridge has to surface it instead of retrying.
+		let privileged = false;
+		try {
+			const probe = Bun.serve({ hostname: "127.0.0.1", port: 1, fetch: () => new Response() });
+			probe.stop(true);
+		} catch (e) {
+			privileged = (e as NodeJS.ErrnoException).code === "EACCES";
+		}
+		if (!privileged) return; // this user may bind low ports, so there is nothing to check
+		await expect(startServer({ port: 1, host: "127.0.0.1", token: TOKEN }, makeDeps())).rejects.toThrow(
+			/permission denied/,
+		);
 	});
 });

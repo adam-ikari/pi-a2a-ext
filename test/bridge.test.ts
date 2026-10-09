@@ -91,6 +91,16 @@ describe("buildToolCatalog", () => {
 		names = ["read", "added_later"];
 		expect((await catalog()).map((t) => t.name)).toEqual(["read", "added_later"]);
 	});
+
+	test("a registry entry with no schema still lists, as an empty object", async () => {
+		// The host's converter throws on a non-object `parameters` (it caches by
+		// WeakMap key), and custom tools can register without one. Falling over here
+		// would take the whole catalog down for every client, so the entry degrades to
+		// `{type: "object"}` instead.
+		const pi = { getAllTools: () => [{ name: "no_schema", description: "", parameters: undefined }] };
+		const catalog = await buildToolCatalog(pi as unknown as ExtensionAPI)();
+		expect(catalog).toEqual([{ name: "no_schema", description: "", inputSchema: { type: "object" } }]);
+	});
 });
 
 describe("buildCallTool exposure gate", () => {
@@ -173,5 +183,64 @@ describe("audit log", () => {
 		}
 		expect(hit).toBeDefined();
 		expect(String(hit?.args)).not.toContain(payload);
+	});
+
+	/**
+	 * The shape that broke the redactor. It stopped at two levels on the reasoning
+	 * that nothing nests deeper, and the host's own `edit` tool nests three:
+	 * `{path, edits: [{oldText, newText}]}`. So a file body went into the log
+	 * verbatim, up to the 1 KB args cap.
+	 *
+	 * Asserted against the whole log line, and against a *window* of the payload
+	 * rather than the payload itself: the args field is truncated at 1024 chars, so
+	 * `not.toContain(fullPayload)` was true even while the leak was open. That is
+	 * why the test above, written for the shallow case, stayed green.
+	 */
+	test("nested args are redacted at every depth, not just the top two", async () => {
+		const payload = "B".repeat(4000);
+		const window = payload.slice(0, 60);
+		const shapes: Array<[string, Record<string, unknown>]> = [
+			["sess-edit", { path: "/etc/hostname", edits: [{ oldText: payload, newText: "x" }] }],
+			["sess-deep", { meta: { inner: { body: payload } } }],
+			["sess-list", { files: [{ content: payload }] }],
+		];
+		const call = buildCallTool(makePi(["read"]), extCtx);
+		for (const [sid, args] of shapes) await call("read", args, sid);
+
+		for (const [sid] of shapes) {
+			const rec = await untilRecord((l) => l.sid === sid && l.phase === "start");
+			expect(rec, `no audit record for ${sid}`).toBeDefined();
+			expect(String(rec?.args)).toContain("<len:4000");
+			const line = JSON.stringify(rec);
+			expect(line.includes(window)).toBe(false);
+			expect(line.includes("B".repeat(120))).toBe(false);
+		}
+	});
+
+	test("one call cannot own the log: args are bounded at 1 KB", async () => {
+		// Redaction folds long *values*, but a call with many ordinary-length values is
+		// still a wall of text. The cap is what keeps a record near-fixed size, which in
+		// turn is what makes the 512 KB rotation window mean something.
+		const args = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`f${i}`, "y".repeat(110)]));
+		const call = buildCallTool(makePi(["read"]), extCtx);
+		await call("read", args, "sess-cap");
+		const rec = await untilRecord((l) => l.sid === "sess-cap" && l.phase === "start");
+		expect(rec, "no audit record for the wide args").toBeDefined();
+		const s = String(rec?.args);
+		expect(s.endsWith("…")).toBe(true);
+		expect(s.length).toBeLessThanOrEqual(1025);
+		// Not a coincidence of the redactor: every value is under the 120-char leaf cap.
+		expect(s).toContain("y".repeat(110));
+	});
+
+	test("a pathological nesting is omitted instead of described", async () => {
+		let args: Record<string, unknown> = { leaf: "C".repeat(4000) };
+		for (let i = 0; i < 40; i++) args = { nested: args };
+		const call = buildCallTool(makePi(["read"]), extCtx);
+		await call("read", args, "sess-depth");
+
+		const rec = await untilRecord((l) => l.sid === "sess-depth" && l.phase === "start");
+		expect(String(rec?.args)).toContain("<max-depth>");
+		expect(JSON.stringify(rec).includes("C".repeat(60))).toBe(false);
 	});
 });
