@@ -4,7 +4,7 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 101 pass / 0 fail（8 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 102 pass / 0 fail（8 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
@@ -150,6 +150,16 @@
 参数在 1024 字符截断这条是变异测出来的：把截断去掉，原先所有测试全绿。补了一项 40 个 110 字符的值（每个都低于 120 字符的叶子闸，全靠上限压住），断言记录里的 `args` 收在 1025 字符以内且以省略号结尾。记录大小近似固定，512 KB 的轮转窗口才谈得上「多少条」。
 
 按分支算，补完之后 `src/bridge.ts` 从 49% 到 99%，`src/server.ts` 从 90% 到 97%，剩的 `104-106` 是 `/blob` 的路由分派，`src/audit.ts` 剩的 `116-136` 是 `auditBlob`，`src/blob.ts` 单测里只有 5%。这三处刻意不补单测：它们要的是真字节进文件系统，宿主探针那边已经在跑（32 项），在单测里再造一个假磁盘只是把同一件事写两遍。
+
+## 释放端口的那一刻，在途那一次算什么
+
+`src/server.ts` 的 `stop()` 原先是 `server.stop(true)`。这条在单测里从来没有对照面：入口那几条按「去连它」判释放，新建连接被拒就通过，至于断开的那一刻有没有一个请求正在处理，没人问。它现在有了自己的一条（`test/server.test.ts` 末尾，「releasing the port」）：起一个 `tools/call`，等 stub 的 `callTool` 确实在跑（一个 `entered` 标志），然后 `stop()`，断言这一次照样拿到 200 和结果文本。
+
+强制切断的代价分两种。`tools/call` 少一行 `done`，客户端拿到 `ECONNRESET`；`POST /blob` 是整个消失——body 还没收完就断，`Buffer.from(await req.arrayBuffer())` 抛在写之前，于是文件没动、`auditBlob` 也没跑到，而那个端点是宿主审批门的例外，审计是它唯一的痕迹。非强制那一半把这两样都保住了：监听立刻关，后来的人一律被拒；已经进来的那一次处理完、返回、落审计。
+
+同一批实测里还有一条 Bun 的缺口，记在这里是为了别把它当成已解决：非强制 `stop()` 不关释放时已经空闲的 keep-alive 套接字，`closeIdleConnections()` 在 1.3.14 只有函数名（返回 `undefined`，socket 照旧服务），`bun-types` 1.4.2 描述的「空闲连接立刻关」是更新版本的行为。所以断言「释放后不接受连接」不能走 HTTP 客户端——它会复用那根老 socket，量到的是这一半而不是监听的状态；这里用 `node:net` 裸连，并在同一条测试里先断它在释放前为 true，免得这个读数只会恒假。
+
+变异两项：把 `stop(true)` 换回去，只红这一条，18 ms 内以 `ECONNRESET` 红；把 `server.stop()` 整个删掉，红五条——这条的裸连接断言，加入口那四条靠新建连接判释放的。
 
 ## 入口那一层（`test/entry.test.ts`，19 项）
 

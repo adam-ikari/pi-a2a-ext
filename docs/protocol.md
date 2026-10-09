@@ -23,6 +23,8 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 - `session_shutdown` 只在宿主注册表里已经没有 `Main` 会话时释放端口。这里的「没有」按 `AgentRef.session` 是不是 `null` 判：宿主把这个字段注释成「Null exactly when parked/aborted」，槽位还在但会话是 `null` 的那种，`tools/call` 本来也只会回一句 `main session not available`，留着端口只是占着一个没人能用的接口。子代理结束（或被 idle-TTL 停泊）会发出这个事件，那时端口照常服务主会话
 - 绑定这一步要 await，所以那个事件可能落在端口落地之前：它手里还没有端口，谁也没停，而绑定随后完成，留下的端口服务的是一个已经不存在的 `Main`。绑完之后再按同一条判据看一次注册表，已经没有 `Main` 就把刚绑的端口收掉，一句广播也不发。这条复查不会挡住正常启动：宿主三个模式（tui、rpc、print）都是在会话已经建好之后才发 `session_start`（`runtime-init.ts:212`、`extension-ui-controller.ts:320-329`），那一刻槽位后面的会话是非 null 的
 - 主会话结束时这条判断也就没有 `Main` 可看了：交互式宿主的 `session_shutdown` 是进程退出那一步发的（端口随进程释放），会话型宿主在 dispose 里注销注册表条目。核验只看一件事——没有 `Main` 之后端口不再接受连接，有 `Main` 期间端口一直在
+- 释放的动作是**非强制**的 `server.stop()`。强制（`stop(true)`）会把正在处理的那一次一刀切断：客户端拿到 `ECONNRESET`，`tools/call` 的审计只剩 `start` 那一行；`POST /blob` 更彻底，body 还没收完就断，于是写不发生、`auditBlob` 也不发生，一次上传无迹可查地没了——而审计是这个端点唯一的痕迹。非强制那一半实测（Bun 1.3.14）：监听立刻关，之后新建连接一律被拒；已经进来的那一次照常处理完、返回、落审计
+- 同一批实测里还有一条偏差要记着：非强制 `stop()` **不关**释放时已经空闲的 keep-alive 套接字（`closeIdleConnections()` 在这个版本只有函数名，返回 `undefined`，socket 照旧；`bun-types` 1.4.2 写的「空闲连接立刻关」是更新版本的行为）。所以释放前就连着、之后仍保持着连接的那一方，在它那一根旧 socket 上还能被服务：`tools/call` 只会拿到 `main session not available`，`/blob` 则仍然写得进去。核验一律按「新建连接被拒」判释放，且用裸 TCP 去连——走 HTTP 客户端的连接池复用，量到的就是这一半而不是监听的状态。这一半是 Bun 的缺口，不是这里已经解决的事
 
 ## 原始字节上传
 

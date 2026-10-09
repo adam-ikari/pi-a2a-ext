@@ -53,7 +53,7 @@ graph TB
 ```
 
 - The extension starts `Bun.serve` on `session_start` and implements MCP `2025-11-25`'s `initialize` / `tools/list` / `tools/call`, answering with plain JSON (no SSE).
-- The endpoint is one per **process**; the host's `session_start` / `session_shutdown` are one per **session** (a task subagent's runner, an ACP session, a persisted revive each get their own). A later `session_start` reuses the running server (two in flight at once bind only one endpoint), and a `session_shutdown` only releases the port once the host registry holds no live `Main` session (`AgentRef.session` is null exactly when it is parked or aborted, and `tools/call` already refuses that state) — otherwise any subagent finishing would take the endpoint down with it. A shutdown that lands mid-bind has no port to stop yet, so the start re-reads the registry when the bind finishes and gives up what it just bound if `Main` is gone.
+- The endpoint is one per **process**; the host's `session_start` / `session_shutdown` are one per **session** (a task subagent's runner, an ACP session, a persisted revive each get their own). A later `session_start` reuses the running server (two in flight at once bind only one endpoint), and a `session_shutdown` only releases the port once the host registry holds no live `Main` session (`AgentRef.session` is null exactly when it is parked or aborted, and `tools/call` already refuses that state) — otherwise any subagent finishing would take the endpoint down with it. A shutdown that lands mid-bind has no port to stop yet, so the start re-reads the registry when the bind finishes and gives up what it just bound if `Main` is gone. Releasing uses a non-forced `stop()`: the listener closes at once and new connections are refused, while a request already in flight finishes and gets its audit pair — a forced close would leave a `tools/call` with half its record and a `POST /blob` with none.
 - The tool catalog comes from the host's current session (`pi.getAllTools()`); execution always routes to `getToolByName` on the host's `Main` session, so calls run the host's own tool implementations.
 - The catalog is the host registry as-is; the bridge does not filter it (see [Security and boundaries](#security-and-boundaries)).
 - Remote calls involve no model inference at all: the host only receives a request, runs a tool, and returns the result.
@@ -278,7 +278,7 @@ bun install
 
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
-bun test              # unit tests: test/*.test.ts (101: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
+bun test              # unit tests: test/*.test.ts (102: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 35 items (needs a local omp)
 bun run test:blob      # POST /blob raw-byte upload, 32 items (needs a local omp)

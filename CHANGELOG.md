@@ -17,6 +17,15 @@
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
 
+## 2026-10-09 — 释放端口那一刻，在途的那一次要落审计
+
+- fix: **释放端口把正在处理的那一次一刀切断**。`src/server.ts` 的 `stop()` 是 `server.stop(true)`，而端口会在三个时刻释放：`session_shutdown` 看见注册表里没有活的 `Main`、绑定中途那次放弃、启动失败的 catch。任一个时刻都可能正有一个请求在处理。代价分两种：`tools/call` 那一边客户端拿到 `ECONNRESET`、审计只剩 `start` 那一行；`POST /blob` 是整个消失，body 还没收完就断，`Buffer.from(await req.arrayBuffer())` 抛在写之前，于是文件没动、`auditBlob` 也没跑到——而那个端点走的正是宿主审批门之外的路，审计是它唯一的痕迹。改成非强制的 `server.stop()`：监听立刻关，后来的人一律被拒，已经进来的那一次处理完、返回、落审计
+- 同一批实测里有一条属于 Bun，不掩盖也不装成已修：非强制 `stop()` 在 1.3.14 **不关**释放时已经空闲的 keep-alive 套接字，`closeIdleConnections()` 只有函数名（返回 `undefined`，socket 照旧被服务），`bun-types` 1.4.2 描述的「空闲连接立刻关」是更新版本的行为。于是这条改动换来的是「新建连接一律进不来」，而释放前就连着、之后仍保持着连接那一方，在它自己的旧 socket 上还能被服务（`tools/call` 只会拿到 `main session not available`，`/blob` 仍写得进去）。核验一律用 `node:net` 裸连判释放，走 HTTP 客户端会复用那根老 socket，量到的是这一半而不是监听的状态
+- test: `test/server.test.ts` +1（23 → 24，单测 101 → 102），新增一节「releasing the port」。起一个 `tools/call`，等 stub 的 `callTool` 确实在跑（一个 `entered` 标志），然后 `stop()`，断言那一次照样 200、结果文本完整，再断裸连被拒。同一条里先断裸连在释放前是 `true`，免得这个读数只会恒假
+- 变异核验两项：把 `stop(true)` 换回去，只红这一条，18 ms 内以 `ECONNRESET` 红；把 `server.stop()` 整个删掉，红五条——这一条的裸连接断言，加入口那四条靠新建连接判释放的
+- docs: 协议页「一个进程，一套端口」加两条（释放的动作为何是非强制、Bun 那条偏差对 `tools/call` 与 `/blob` 各意味着什么），`docs/testing.md` 新增同名一节，README 中英两版的生命周期那条各补一句，站点摘要与单测计数同步到 102（下一节又把它推到 104）
+- 回归：`lint` / `tsc` / `bun test` 102/102；六个宿主核验全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 32 项、`SCENARIOS 54 steps, 0 failed`、`VERDICT: B`、`PACKAGE OK`）
+
 ## 2026-10-09 — 每会话的事件，每进程的端口
 
 - fix: **任何一次子代理结束都会拆掉还在服务的端口**。`extensions/a2a-bridge.ts` 把 `server?.stop()` 挂在 `session_shutdown` 上，而这个事件是**每会话**的：宿主为 task 子代理、ACP 会话、持久化 revive 各建一套 extension runner 并重跑扩展工厂（模块图不重新求值，`server`/`cfg` 因此共享），一个 task 子代理跑完，它的 `session_shutdown` 落到同一个 handler，端口释放，而主会话那边再没有第二个 `session_start` 把它重启。现在的判据是宿主注册表里还有没有 `Main` 会话（`src/bridge.ts` 的 `hasMainSession()`）：有就照常服务，没有才收。交互式宿主的 `/new` 不在此列——它复用同一个 runner，根本不重发 `session_start`
