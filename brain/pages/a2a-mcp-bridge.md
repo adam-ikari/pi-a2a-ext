@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-09T01:39:44"
+updated: "2026-10-09T02:16:32"
 ---
 
 <!-- compiled_truth -->
@@ -538,4 +538,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "入口层可单测，且不靠 mock：$A2A_BRIDGE_CONFIG 指临时文件、端口写 0、Main 是真注册进 AgentRegistry.global() 的假货，每条断言都从广播文本里解析端口再去连它（200 = 在服务，连不上 = 没在服务）。反面结论：Bun 的 mock.module 是进程级的，用它 stub server/config/bridge 会让同一进程里 test/config.test.ts 的真 loadConfig 被换掉，12 项红掉——所以这条路由只能走真依赖。test/entry.test.ts 16 项 + test/host-call.test.ts 的 hasMainSession 3 项（对真注册表测空表/在册/在册但无会话，入口的判断就靠这个读数，不能被 stub），单测 79 → 98。变异核验七项：拆闸、rotate 顺序、catch 不 stop、catch 不清状态、hasMainSession 恒真（红真注册表那 3 项）与恒假各 1，广播改用配置端口那项红 7 项。"
   source: "test/entry.test.ts + session 2026-10-09 入口生命周期"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T02:00:09
+  kind: evidence
+  summary: "入口的绑定不是原子的：loadConfig 与 startServer 都要 await，所以两个 session_start 能在同一个 if (server) 检查上同时通过并各绑一套端口，模块只记住后一个，前一个端口没有名字、谁也停不掉，操作者还会收到两条指向不同端口的广播。这条先写成红的测试（并发用例里第二个 runner 从广播里解析出了一个端口号），再用 bringingUp 这道在途闸修掉：后到的等前一个绑完再复用。变异核验：去掉在途闸只红并发那一条。单测 98 → 99（entry 16 → 17），五连宿主核验复跑全绿（SMOKE / HARDEN 35 / BLOB 32 / SCENARIOS 54 / VERDICT B）。"
+  source: "test/entry.test.ts 并发用例 + 变异核验"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T02:16:32
+  kind: evidence
+  summary: "绑定的 await 窗口里来的 session_shutdown 手里没有端口可停（server 还是 null），于是它谁也没停，而绑定随后完成，留下一个服务死会话的端口，此后没有第二个 session_start 纠正它。修法是绑完之后按同一条 hasMainSession() 判据复查一次：已经没有 Main 就 stop 并清空，一句广播也不发。这条测试先红过（修复前端口从广播里解析得出来），变异核验去掉复查只红这一条。真宿主冷启动不受影响：Main 在构造时就预注册进 AgentRegistry（sdk.ts 的 pre-register 注释），早于扩展的 session_start，所以「复查时发现没有 Main」不会发生在正常启动路径；smoke / hardening / blob / scenario / approval(VERDICT B) / install 全部复跑全绿。单测 99 → 100（entry 17 → 18）。"
+  source: "test/entry.test.ts mid-bind 用例 + 变异核验"
   affects: [a2a-mcp-bridge]
