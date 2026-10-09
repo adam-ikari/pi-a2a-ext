@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
 import { auditLogPath } from "../src/audit.ts";
-import { buildCallTool, hasMainSession } from "../src/bridge.ts";
+import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 
 const savedEnv = { ...process.env };
 let auditDir: string;
@@ -65,12 +65,20 @@ interface Harness {
 	events: Array<Record<string, unknown>>;
 	controls: Record<string, unknown>;
 	call: (name: string, args: unknown, sid?: string | null) => Promise<{ content: unknown[]; isError: boolean }>;
+	/** The bridge's `tools/list`, built from the same pinned `pi` the entry gives it. */
+	catalog: () => Promise<Array<{ name: string }>>;
 }
 
 function mount(opts: {
 	toolName?: string;
 	/** Extra names advertised by the catalog but absent from the session. */
 	catalogOnly?: string[];
+	/**
+	 * Names the *pinned runner* advertises. Default is Main's own set; a value here
+	 * models the first `session_start` coming from somebody else's runner (a task
+	 * subagent, an ACP session), whose registry is not Main's.
+	 */
+	pinnedPiNames?: string[];
 	result?: { content: unknown[]; isError?: boolean };
 	throws?: Error;
 	/** Thrown from the host's event sink, to model a host that cannot take the event. */
@@ -84,6 +92,15 @@ function mount(opts: {
 		modelRegistry: { which: "modelRegistry" },
 		model: { which: "model" },
 		settings: { which: "settings" },
+		// What the host's `pi.getAllTools()` is wired to (runtime-init.ts:126), so the
+		// fake has to carry it for the catalog and the exposure gate to read.
+		getAllToolInfos() {
+			return [name, ...(opts.catalogOnly ?? [])].map((n) => ({
+				name: n,
+				description: `${n} tool`,
+				parameters: { type: "object" },
+			}));
+		},
 		getToolByName(tool: string) {
 			if (tool !== name) return undefined;
 			return {
@@ -124,13 +141,20 @@ function mount(opts: {
 	const extCtx = { hasUI: true, ...controls } as unknown as ExtensionContext;
 	const pi = {
 		getAllTools: () =>
-			[name, ...(opts.catalogOnly ?? [])].map((n) => ({
+			(opts.pinnedPiNames ?? [name, ...(opts.catalogOnly ?? [])]).map((n) => ({
 				name: n,
 				description: `${n} tool`,
 				parameters: { type: "object" },
 			})),
 	};
-	return { session, seen, events, controls, call: buildCallTool(pi as unknown as ExtensionAPI, extCtx) };
+	return {
+		session,
+		seen,
+		events,
+		controls,
+		call: buildCallTool(pi as unknown as ExtensionAPI, extCtx),
+		catalog: async () => (await buildToolCatalog(pi as unknown as ExtensionAPI)()).map((t) => ({ name: t.name })),
+	};
 }
 
 describe("buildCallTool host hand-off", () => {
@@ -254,13 +278,51 @@ describe("buildCallTool host hand-off", () => {
 	});
 
 	test("advertised by the catalog but absent from the session -> unknown tool", async () => {
-		// `tools/list` reads the extension's registry; execution resolves through the
-		// session. The two can disagree (a tool disabled for the host's own model),
-		// and the caller then gets this message — not "not exposed", not a throw.
-		const h = mount({ catalogOnly: ["disabled_for_me"] });
-		const r = await h.call("disabled_for_me", {});
-		expect(r).toEqual({ content: [{ type: "text", text: "unknown tool 'disabled_for_me'" }], isError: true });
+		// Both reads go to Main's registry now, so disagreeing means the tool went away
+		// between them (a unregister racing the call). The caller then gets this
+		// message — not "not exposed", not a throw.
+		const h = mount({ catalogOnly: ["gone_between_reads"] });
+		const r = await h.call("gone_between_reads", {});
+		expect(r).toEqual({ content: [{ type: "text", text: "unknown tool 'gone_between_reads'" }], isError: true });
 		expect(h.seen.length).toBe(0);
+	});
+});
+
+describe("one registry behind the catalog, the gate and the call", () => {
+	// The entry pins the first `session_start`'s `pi`, and the host wires
+	// `pi.getAllTools()` to *that runner's own* session (`runtime-init.ts:126`,
+	// `acp-agent.ts:2581`). Execution resolves Main's live session per call. Two
+	// authorities, so as soon as the first session_start is not Main's — a task
+	// subagent or an ACP session can get there first — the bridge advertises one
+	// session's tools and refuses another session's.
+	test("the catalog lists what Main can run, not what the pinned runner advertises", async () => {
+		const h = mount({ pinnedPiNames: ["subagent_only"] });
+		expect((await h.catalog()).map((t) => t.name)).toEqual(["read"]);
+		// And the two directions of the mistake are both closed: Main's own name
+		// executes instead of being refused, and the other session's name is refused at
+		// the gate instead of reaching `getToolByName` and coming back as "unknown tool".
+		const ok = await h.call("read", {});
+		expect(ok.isError).toBe(false);
+		expect(h.seen.length).toBe(1);
+		const refused = await h.call("subagent_only", {});
+		expect(refused.isError).toBe(true);
+		expect((refused.content[0] as { text?: string }).text).toContain("is not exposed by this bridge");
+	});
+
+	test("with Main parked the catalog keeps the runner's own view", async () => {
+		// `session: null` is the host's sentinel for parked/aborted, and the port is
+		// released at the `session_shutdown` that follows — but not instantaneously. In
+		// that window the alternative is an empty `tools/list`, which would report a
+		// registry the host still has.
+		const h = mount({ pinnedPiNames: ["read", "extra"] });
+		AgentRegistry.global().register({
+			id: MAIN_AGENT_ID,
+			displayName: "parked-main",
+			kind: "main",
+			status: "parked",
+			session: null,
+		});
+		expect((await h.catalog()).map((t) => t.name)).toEqual(["read", "extra"]);
 	});
 });
 
