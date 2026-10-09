@@ -306,12 +306,16 @@ describe("hasMainSession", () => {
 		expect(hasMainSession()).toBe(false);
 	});
 
-	test("a Main slot with no session behind it does not count", () => {
+	test("a parked Main does not count: the host's own sentinel is null", () => {
+		// AgentRef.session is `AgentSession | null`, and the registry documents it as
+		// "Null exactly when parked/aborted" — so null, not undefined, is the value a real
+		// host leaves behind. It has to agree with the call path, which reads `!ref?.session`.
 		AgentRegistry.global().register({
 			id: MAIN_AGENT_ID,
-			displayName: "no-session",
+			displayName: "parked-main",
 			kind: "main",
-			session: undefined as never,
+			status: "parked",
+			session: null,
 		});
 		expect(hasMainSession()).toBe(false);
 	});

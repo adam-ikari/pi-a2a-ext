@@ -290,6 +290,25 @@ describe("session_shutdown", () => {
 		expect(await ping(next.advertisedPort() as number)).toBe(200);
 	});
 
+	test("a parked Main releases the port, because nothing can be served through it", async () => {
+		const main = newRunner();
+		await main.start();
+		const port = main.advertisedPort();
+		// The host's own sentinel: `AgentRef.session` is null exactly when the slot is
+		// parked or aborted. The call path already refuses that state with "main session
+		// not available", so the release rule has to read it the same way.
+		AgentRegistry.global().register({
+			id: MAIN_AGENT_ID,
+			displayName: "parked-main",
+			kind: "main",
+			status: "parked",
+			session: null,
+		});
+		const sub = newRunner();
+		await sub.shutdown();
+		expect(await ping(port as number)).toBeNull();
+	});
+
 	test("a session_start after that binds a fresh port", async () => {
 		const first = newRunner();
 		await first.start();
