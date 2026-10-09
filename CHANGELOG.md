@@ -17,6 +17,27 @@
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
 
+## 2026-10-09 — 渲染事件不该决定一次调用的结果
+
+- fix: **宿主拒绝渲染事件时，一次已经执行完的写会被报成失败**。`src/bridge.ts` 里那两次 `emitExternalEvent` 坐在判定结果的 `try` 中。三种后果：start 被拒则工具根本不执行；end 被拒则 `edit` 照常落盘而调用方拿到 `isError`，照着它重试就重复执行一次带副作用的写；工具本身抛错时交出去的错误文本被换成渲染自己的那一条。注释写的是「只驱动渲染」，代码没做到。现在事件的构造与发送失败都吞掉，成功与失败两条路合到同一处结果映射，`toInputSchema` 那类降级照旧
+- test: 新增 `test/host-call.test.ts`（14 项）。`buildCallTool` 交给 Main 会话的那半条路径此前一行 deterministic 测试都没有，只在 `test:smoke` 里跑过，而探针能调的工具只返回文本块。`AgentRegistry.register` 接受任何对象作 `session`，`resetGlobalForTests` 就是为此而设，于是不必起宿主也能断：text/image 原样转出（`detail` 不透传）、其他块折成 JSON 文本、`isError` 到调用方与审计、参数按引用交出、工具上下文里 `hasPendingMessages` → `hasQueuedMessages` 那次改名、一调一对事件且 `toolCallId` 是新 UUID、目录有而会话无的名字回 `unknown tool`
+- test: `test/server.test.ts` +3。500 那句「细节只进服务端日志」两半都断上了（响应体查不到假宿主路径，`console.error` 拿到了错误对象）；端口退避分支原先不可能覆盖到，因为其余测试都以 `port: 0` 起服务，现在用真实占用的端口断 `fellBack`，反向一条用特权端口的 EACCES 断它不该退避（环境允许绑低端口时跳过）
+- test: `test/audit.test.ts` +3、`test/bridge.test.ts` +2。参数含 `JSON.stringify` 拒绝的值时记录仍落盘（`args` 退化成 `[object Object]`）；日志写不成时不同步抛错也不以 unhandled rejection 冒到宿主进程，`appendLine` 末尾那个 `.catch(() => {})` 至此才有断言撑着；注册表里缺 `parameters` 的条目降级成 `{type: "object"}` 而不是把整份目录带走；参数在 1024 字符截断（去掉截断，原先所有测试全绿，所以补了一项 40 × 110 字符的用例）
+- 变异验证：12 处逐项破坏实现（image 分支、`hasQueuedMessages`、`structuredClone` 参数、end 换 id、`if (!tool)`、未知块原样发出、吃掉 `isError`、不发 start、500 泄露细节、任何绑定失败都退避、`fellBack` 不置位、去掉参数上限与去掉两处 catch），每项只让自己那条断言变红。fix 本身另以 `git stash push src/bridge.ts` 回到改前状态验证：恰好渲染事件那三项变红，其余十一项绿
+- docs: 协议页写清结果内容的三种情形与渲染事件不参与判定这件事；`tools/list` 那条补上「宿主转换器对非对象 `parameters` 会抛，桥接住并降级」。内存表按第十一轮实测重落（空闲 490 MB，单个 8 MB 安顿 +9 MB，两个并发 +16 MB，在途峰值 +32 / +33 MB）
+- 计数同步：README 中英两版的加固项数 33 → 35（上一批把核验加到 35 项时漏改），单测 57 → 79（7 文件）
+- 回归：`lint` / `tsc` / `bun test` 79/79；宿主核验五连全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 32 项、`SCENARIOS 54 steps, 0 failed`、`VERDICT: B`）
+
+## 2026-10-08 — 参数脱敏只走两层，而宿主 `edit` 的正文在第三层
+
+- fix: **审计日志会写下文件正文**。`src/audit.ts` 的 `redact()` 走到第二层就停，注释写着「工具参数不会嵌得更深」，而宿主自己的 `edit` 是 `{path, edits: [{oldText, newText}]}`，正文落在第三层。远程调用一次 `edit`，日志里就多出最多 1 KB 的文件内容（只有 `MAX_ARGS_CHARS` 的截断挡着）。现在逐层走到叶子；嵌套超过 32 层的子树整个换成 `<max-depth>`，不再往下走
+- test: 原有的那条脱敏单测（`test/bridge.test.ts`）断言 `args` 字段不含完整的 5000 字符 payload，而那个字段本来就截在 1024 字符，整段永远不可能出现，于是漏洞开着它也是绿的。改成在整行日志里查 payload 的 60 字符窗口，另加一条 40 层嵌套的用例（单测 55 → 57）
+- test: `test:hardening` 33 项 → 35 项，同样的事从宿主这一侧再验一次：真发一次带三层正文的 `tools/call`，然后在日志里确认 `<len:4000,sha256:` 查得到、那 60 字符的窗口查不到
+- 变异验证：把 `redact()` 的层数停止条件还原，两条单测如实变红。宿主核验那两项的红走的是 `until` 超时抛出，所以那一轮后面的项没跑（27 项 ok 之后中止）。这是宿主核验的既有风格：等不到本该出现的证据就中止，后面的结论没有意义
+- docs: README 中英两版与协议页把脱敏的范围写清：**逐层到叶子**，且这是桥自己那份日志的承诺；宿主会话照常收到原参数，宿主的 transcript 里有什么不归本桥管
+- 顺带记一条观察：宿主 stdout 会把收到的参数原样打出来，核验失败时探针打印的日志尾部因此带着那个 4 KB 的 payload。保留现场这件事，在有 payload 的用例上要多加一分小心
+- 回归：`lint` / `tsc` / `bun test` 57/57 三绿；`HARDEN OK`（35 项）
+
 ## 2026-10-08 — `/blob` 两处「报了成功却没写成」，与审计日志的保质期
 
 - fix: **两个调用方同时写一个新文件会丢字节，两条请求都回 200**。旧实现在 body 读进来之前取文件大小、据此选打开方式，两边都看到 0、都选 `w`，而 `w` 在 open 时截断，第二次 open 抹掉第一次已经落盘的内容。改成一律 `"a"` 打开；给了显式 `offset` 的调用方在拿到句柄之后复查一次大小，位置变了就 409，字节不放，也不回报你那个 offset

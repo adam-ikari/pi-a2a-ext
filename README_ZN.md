@@ -219,7 +219,7 @@ curl -X POST --data-binary @firmware.bin \
 - **`POST /blob` 是例外，它不经宿主审批门。** 它收原始字节（省掉 base64），直接落盘，桥自己解释路径——**能写宿主能写的任何路径，无根目录、无白名单**。这是刻意的取舍：扩展无法主动发起审批（`ExtensionAPI` 只有 `on("tool_approval_requested", …)`，那是宿主问、扩展答的方向），而唯一能过审批门的写入方式是发一次 `tools/call`，那正是 `/blob` 要避免的编码。审计照旧记 `tool: "blob:write"`，args 只有 `path`/`offset`/`bytes`，文件内容不进日志。详见 [协议参考](docs/protocol.md)。
 - 默认仅回环监听；真要对外暴露，防火墙自己负责。
 - **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
-- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。这里的 `id` 是本桥为配对生成的 UUID，调用方的 JSON-RPC id 不落日志，所以按 JSON-RPC id 查不到。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷。日志写失败不影响调用。
+- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。这里的 `id` 是本桥为配对生成的 UUID，调用方的 JSON-RPC id 不落日志，所以按 JSON-RPC id 查不到。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷，且**不分嵌套层数**：宿主 `edit` 的文件正文就落在 `args.edits[0].oldText`（第三层），只走两层的脱敏会把它原样写出去。嵌套超过 32 层整个子树换成 `<max-depth>`，不再往下走。这里说的是桥自己这份日志；宿主会话照常收到那些参数，宿主自己的记录归宿主管。日志写失败不影响调用。
 - **只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）。读这个信号有两处坑，都实测过：轮转可能把一次调用的两条分处 `.1` 与当前文件，所以要在两个文件里按 `id` 配对；而且只保留一代——下一次轮转会覆盖 `.1`，挂起调用的证据会被后续流量冲出日志。要在它还在的时候读。
 - 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
@@ -260,9 +260,9 @@ bun install
 
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
-bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/审计/版本守卫）
+bun test              # 单测：test/*.test.ts（协议/鉴权/配置/暴露门/宿主交接/审计/版本守卫）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
-bun run test:hardening # 真实宿主加固核验，33 项（需本机 omp）
+bun run test:hardening # 真实宿主加固核验，35 项（需本机 omp）
 bun run test:blob      # POST /blob 原始字节上传，32 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，10 个叙事 / 54 步，约 45 秒（需本机 omp）
