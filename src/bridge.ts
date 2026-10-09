@@ -60,6 +60,16 @@ export function buildToolCatalog(pi: ExtensionAPI): () => Promise<McpTool[]> {
 type RenderEvent = Parameters<AgentSession["agent"]["emitExternalEvent"]>[0];
 
 /**
+ * Whether the host still has a Main session for the bridge to serve. The host's
+ * registry is the only authority on that, and it is also what tells one session's
+ * shutdown from another's: the `ExtensionContext` handed to a handler is rebuilt on
+ * every emit, so it carries no usable identity.
+ */
+export function hasMainSession(): boolean {
+	return AgentRegistry.global().get(MAIN_AGENT_ID)?.session !== undefined;
+}
+
+/**
  * Mirror a tool event into the host's bus so the controlled TUI renders each remote
  * call exactly like a local one (same card, same lifecycle). Unlike `message_end`
  * these never touch the message stream, so a remote call cannot perturb the LLM
