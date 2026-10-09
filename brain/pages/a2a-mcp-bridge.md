@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-09T02:16:32"
+updated: "2026-10-09T02:36:05"
 ---
 
 <!-- compiled_truth -->
@@ -550,4 +550,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "绑定的 await 窗口里来的 session_shutdown 手里没有端口可停（server 还是 null），于是它谁也没停，而绑定随后完成，留下一个服务死会话的端口，此后没有第二个 session_start 纠正它。修法是绑完之后按同一条 hasMainSession() 判据复查一次：已经没有 Main 就 stop 并清空，一句广播也不发。这条测试先红过（修复前端口从广播里解析得出来），变异核验去掉复查只红这一条。真宿主冷启动不受影响：Main 在构造时就预注册进 AgentRegistry（sdk.ts 的 pre-register 注释），早于扩展的 session_start，所以「复查时发现没有 Main」不会发生在正常启动路径；smoke / hardening / blob / scenario / approval(VERDICT B) / install 全部复跑全绿。单测 99 → 100（entry 17 → 18）。"
   source: "test/entry.test.ts mid-bind 用例 + 变异核验"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-09T02:36:05
+  kind: decision
+  summary: "「还有没有 Main 可服务」按宿主的哨兵判：AgentRef.session 的类型是 AgentSession | null，注释写着 Null exactly when parked/aborted，所以 hasMainSession() 用 != null 而不是 !== undefined。理由是同一条调用路径（buildCallTool 里 if (!ref?.session)）本来就拒绝这个状态并回 main session not available，两处读同一个字段必须得出同一个结论，否则释放规则说「有 Main，留着端口」而执行说「没有」。随之确立：入口的绑定与释放都以「能不能真的服务」为准，不以槽位是否存在为准。冷启动安全性按宿主源码核对：Main 在 createAgentSession 里预注册（session: null）、构造结束时 attachSession 附上活会话，而 tui / rpc / print 三个模式都是在会话建好之后才 emit session_start（runtime-init.ts:212、extension-ui-controller.ts:320-329），所以绑完之后的复查挡不到正常启动。宿主核验探针只跑 --mode rpc，tui 与 print 那一半是源码核对，不是实测。"
+  source: "node_modules/@oh-my-pi/pi-coding-agent/src/registry/agent-registry.ts:69 · src/bridge.ts:108"
   affects: [a2a-mcp-bridge]
