@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
+import {
+	AgentRegistry,
+	type AgentSession,
+	type ExtensionAPI,
+	type ExtensionContext,
+	MAIN_AGENT_ID,
+} from "@oh-my-pi/pi-coding-agent";
 // Loads pi-coding-agent's AgentToolContext augmentation (CustomToolContext
 // fields + ui/hasUI) so the execute() context literal is fully type-checked
 // instead of relying on the all-optional base declaration.
@@ -51,6 +57,28 @@ export function buildToolCatalog(pi: ExtensionAPI): () => Promise<McpTool[]> {
 	};
 }
 
+type RenderEvent = Parameters<AgentSession["agent"]["emitExternalEvent"]>[0];
+
+/**
+ * Mirror a tool event into the host's bus so the controlled TUI renders each remote
+ * call exactly like a local one (same card, same lifecycle). Unlike `message_end`
+ * these never touch the message stream, so a remote call cannot perturb the LLM
+ * context.
+ *
+ * The event is built lazily and its failure is dropped, because these calls sit on
+ * the path that decides a call's outcome. A host that refuses one used to: stop the
+ * call before the tool ran, report a call that *had* run (side effects and all) as a
+ * failure, or on the error path replace the tool's own message with the refusal.
+ * Rendering is not entitled to any of that.
+ */
+function emitRenderEvent(agent: AgentSession["agent"], make: () => RenderEvent): void {
+	try {
+		agent.emitExternalEvent(make());
+	} catch {
+		// cosmetic only — see above
+	}
+}
+
 /**
  * Build the tools/call executor: resolve the name against the same registry
  * tools/list advertises, then hand it to the host's tool implementation.
@@ -87,40 +115,33 @@ export function buildCallTool(
 			hasUI: extCtx.hasUI,
 			localProtocolOptions: extCtx.localProtocolOptions,
 		};
-		// Mirror the host's own tool events so the controlled TUI renders each
-		// remote call exactly like a local one (same card, same lifecycle). These
-		// events drive rendering only — unlike message_end they never touch the
-		// message stream, so the remote call cannot perturb the LLM context.
+		// Mirror the host's own tool events (see emitRenderEvent for why a failure
+		// here is dropped).
 		const toolCallId = randomUUID();
-		session.agent.emitExternalEvent({ type: "tool_execution_start", toolCallId, toolName: name, args });
+		emitRenderEvent(session.agent, () => ({ type: "tool_execution_start", toolCallId, toolName: name, args }));
+		let r: Awaited<ReturnType<typeof tool.execute>>;
 		try {
-			const r = await tool.execute(toolCallId, args, undefined, undefined, ctx);
-			session.agent.emitExternalEvent({
-				type: "tool_execution_end",
-				toolCallId,
-				toolName: name,
-				result: r,
-				isError: !!r.isError,
-			});
-			const content = (r.content ?? []).map((b) =>
-				b?.type === "text"
-					? { type: "text" as const, text: b.text }
-					: b?.type === "image"
-						? { type: "image" as const, data: b.data, mimeType: b.mimeType }
-						: { type: "text" as const, text: JSON.stringify(b) },
-			);
-			return { content, isError: !!r.isError };
+			r = await tool.execute(toolCallId, args, undefined, undefined, ctx);
 		} catch (e) {
-			const message = (e as Error)?.message ?? String(e);
-			session.agent.emitExternalEvent({
-				type: "tool_execution_end",
-				toolCallId,
-				toolName: name,
-				result: { content: [{ type: "text", text: message }], isError: true },
-				isError: true,
-			});
-			return { content: [{ type: "text", text: message }], isError: true };
+			// A throw out of execute() has no structured result to carry, so the
+			// host's error text becomes the content, as the host's own loop does it.
+			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
+		emitRenderEvent(session.agent, () => ({
+			type: "tool_execution_end",
+			toolCallId,
+			toolName: name,
+			result: r,
+			isError: !!r.isError,
+		}));
+		const content = (r.content ?? []).map((b) =>
+			b?.type === "text"
+				? { type: "text" as const, text: b.text }
+				: b?.type === "image"
+					? { type: "image" as const, data: b.data, mimeType: b.mimeType }
+					: { type: "text" as const, text: JSON.stringify(b) },
+		);
+		return { content, isError: !!r.isError };
 	};
 
 	const run = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
