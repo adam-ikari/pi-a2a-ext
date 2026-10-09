@@ -20,14 +20,16 @@
 ## 2026-10-09 — 每会话的事件，每进程的端口
 
 - fix: **任何一次子代理结束都会拆掉还在服务的端口**。`extensions/a2a-bridge.ts` 把 `server?.stop()` 挂在 `session_shutdown` 上，而这个事件是**每会话**的：宿主为 task 子代理、ACP 会话、持久化 revive 各建一套 extension runner 并重跑扩展工厂（模块图不重新求值，`server`/`cfg` 因此共享），一个 task 子代理跑完，它的 `session_shutdown` 落到同一个 handler，端口释放，而主会话那边再没有第二个 `session_start` 把它重启。现在的判据是宿主注册表里还有没有 `Main` 会话（`src/bridge.ts` 的 `hasMainSession()`）：有就照常服务，没有才收。交互式宿主的 `/new` 不在此列——它复用同一个 runner，根本不重发 `session_start`
+- fix: **两个 `session_start` 同时在途会各绑一套端口**。绑定这一步不是原子的，`loadConfig` 与 `startServer` 都要 await，于是后到的那一个能在 `if (server)` 检查上赶在前一个赋值之前通过，真的再绑一个。模块只记住后一个端口，前一个从此谁也停不掉，操作者还会收到两条指向不同端口的广播。现在后到的等前一个绑完再复用那套
+- fix: **绑定还在进行时的 `session_shutdown` 手里没有端口可停**。那个事件的 handler 只看 `server`，而 `loadConfig` 与 `startServer` 都还没回来时它是 `null`，于是它谁也没停，绑定却在随后完成——留下的端口服务的是一个已经不存在的 `Main`，此后再没有 `session_start` 来纠正它。现在绑完那一刻按同一条判据（`hasMainSession()`）复查一次：已经没有 `Main` 就把刚绑的端口收掉，一句广播也不发
 - fix: **`/a2a rotate` 先改内存再写文件**，写失败就是运行中的桥换了 token、配置文件留着旧 token、操作者收到一句「失败」。改成先落盘再生效
 - 顺带记下启动失败那条注释（「不留半初始化状态」）现在有据可查：catch 里的 `stop()` 与清状态两半各有断言，只清 `cfg` 而留着 `server` 那种改法红不了——挡住 `rotate` 的是两个条件里任一个，这条保护本来就写在注释里，现在写在测试里
-- test: 新增 `test/entry.test.ts`（16 项，单测 79 → 95）。入口此前没有任何单测能引到它。不 mock 任何模块：`$A2A_BRIDGE_CONFIG` 指临时文件、端口写 `0`、`Main` 是真注册进 `AgentRegistry.global()` 的假货，每条断言都是「从广播里解析出端口，然后去连它」——200 就是在服务，连不上就是没在服务。`mock.module` 试过，也不行：Bun 的模块 mock 是进程级的，同一进程里 `test/config.test.ts` 的 `loadConfig` 会被换掉，`bun test` 整个绿不回来
-- test: `test/host-call.test.ts` +3（14 → 17，单测 95 → 98），`hasMainSession()` 对着真注册表测三种情形：空表、`Main` 在册、`Main` 在册但背后没有会话。入口那条判断就靠这个读数，所以它不能被 stub
-- 变异核验七项：去掉 `hasMainSession()` 那道闸（红 1 项）、`rotate` 的赋值挪回写盘之前（1）、catch 里不再 `stop()`（1）、catch 里什么都不清（1）、`hasMainSession()` 恒真（红的正是真注册表那 3 项）与恒假（1）。最后一条是广播里改用配置的端口：红 7 项——端口报错了，所有「去连它」的断言一起塌，这条恰恰证明断言是连着真端口写的
-- docs: 协议页新增「一个进程，一套端口」，把后来的 `session_start` 静默复用、审批归属第一份 `ctx`（子代理那份没有可用 UI，让它占住引用会一路挂住）、`Main` 没了才释放三条写清；README 中英两版各加一条
-- 计数同步：README 中英两版的 `bun test` 说明加 98 项与两组新覆盖面，站点 testing 摘要同步；内存表按第十二轮实测重落（空闲 567 MB，单个 8 MB 安顿 +34 MB，两个并发 +52 MB，在途峰值 +53 / +52 MB），并记下基线自己一轮就从 490 MB 走到 567 MB
-- 回归：`lint` / `tsc` / `bun test` 98/98；宿主核验五连全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 32 项、`SCENARIOS 54 steps, 0 failed`、`VERDICT: B`），其中场景核验的「宿主结束 → 端口不再接受连接」正是这条改动的反例位
+- test: 新增 `test/entry.test.ts`（18 项，单测 79 → 97）。入口此前没有任何单测能引到它。不 mock 任何模块：`$A2A_BRIDGE_CONFIG` 指临时文件、端口写 `0`、`Main` 是真注册进 `AgentRegistry.global()` 的假货，每条断言都是「从广播里解析出端口，然后去连它」——200 就是在服务，连不上就是没在服务。`mock.module` 试过，也不行：Bun 的模块 mock 是进程级的，同一进程里 `test/config.test.ts` 的 `loadConfig` 会被换掉，`bun test` 整个绿不回来
+- test: `test/host-call.test.ts` +3（14 → 17，单测 97 → 100），`hasMainSession()` 对着真注册表测三种情形：空表、`Main` 在册、`Main` 在册但背后没有会话。入口那条判断就靠这个读数，所以它不能被 stub
+- 变异核验九项：去掉 `hasMainSession()` 那道闸（红 1 项）、`rotate` 的赋值挪回写盘之前（1）、catch 里不再 `stop()`（1）、catch 里什么都不清（1）、`hasMainSession()` 恒真（红的正是真注册表那 3 项）与恒假（1）、去掉在途那道闸（1，红的正是并发那条）、去掉绑完之后那次复查（1，红的正是绑定中途结束那条）。第九项是广播里改用配置的端口，红 7 项——端口报错了，所有「去连它」的断言一起塌，这条恰恰证明断言是连着真端口写的
+- docs: 协议页新增「一个进程，一套端口」，把后来的 `session_start` 静默复用、并发到达时后到的等前一个绑完、审批归属第一份 `ctx`（子代理那份没有可用 UI，让它占住引用会一路挂住）、`Main` 没了才释放、绑定落地后按同一判据复查这五条写清；README 中英两版各加一条
+- 计数同步：README 中英两版的 `bun test` 说明加 100 项与两组新覆盖面，站点 testing 摘要同步；内存表按第十五轮实测重落（空闲 461 MB，单个 8 MB 安顿 +27 MB，两个并发 +157 MB，在途峰值 +27 / +243 MB），基线近五轮依次是 490、567、484、474、461 MB
+- 回归：`lint` / `tsc` / `bun test` 100/100；宿主核验五连与发布包核验全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 32 项、`SCENARIOS 54 steps, 0 failed`、`VERDICT: B`、`PACKAGE OK`）。冷启动那一步也在这几项里复查过：宿主在构造会话时就把 `Main` 预注册进注册表（`sdk.ts` 里那行 pre-register 注释），早于扩展的 `session_start`，所以绑定之后的复查不会把正常启动挡掉。场景核验的「宿主结束 → 端口不再接受连接」正是第一条改动的反例位
 
 ## 2026-10-09 — 渲染事件不该决定一次调用的结果
 
