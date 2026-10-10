@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditDone, auditStart } from "../src/audit.ts";
 
@@ -46,16 +46,15 @@ describe("audit rotation retention", () => {
 	};
 
 	/**
-	 * Enough pairs to cross the 512 KB cap at least once. Appends are dispatched
-	 * concurrently by design, and a chain that stat'd before another crossed the cap
-	 * can overshoot it, so the loop yields every 20 pairs: the retention fact is
-	 * about size, and racing 1200 chains at once would only blur it.
+	 * Enough pairs to cross the 512 KB cap at least once. The pairs go out back to
+	 * back: `appendLine` hands each line to one process-wide chain, so there is no
+	 * interleaving left to blur the size, and how fast they arrive does not change
+	 * which records survive.
 	 */
 	const phase = async (tag: string, pairs = 300) => {
 		for (let i = 0; i < pairs; i++) {
 			auditStart(`${tag}-${i}`, "sid", "read", fatter, env);
 			auditDone(`${tag}-${i}`, "sid", "read", fatter, false, env);
-			if (i % 20 === 0) await Bun.sleep(1);
 		}
 		await flush();
 		await Bun.sleep(200); // let the last few in-flight appends land
@@ -160,4 +159,103 @@ describe("audit never loses a call", () => {
 		}
 		expect(unhandled).toEqual([]);
 	});
+});
+
+/**
+ * Concurrent writes across the rotation boundary.
+ *
+ * `appendLine` does `stat` then `rename` then `appendFile`, and those three are not
+ * one step. Two calls that are in flight together can both read a size over the cap
+ * and both rotate, and the second `rename` writes over the `.1` the first one just
+ * put the previous generation into. The loss lands on whichever records happened to
+ * sit in the current file when the extra rotation fired, written milliseconds
+ * earlier, plus the whole generation that was rotated out of the way. The docs
+ * promise one retained generation and the pair readable across both files; under
+ * this race a call's `start` can be in neither, and a `POST /blob` — whose audit
+ * line is its only trace, the endpoint does not go through the host's approval
+ * gate — can leave no trace at all.
+ *
+ * The log is primed to just under 512 KB and hit with a burst, so exactly one
+ * rotation is needed to hold everything. That is the line the test draws: one
+ * rotation keeps every record visible across the two files, any extra rotation has
+ * eaten data. Measured on the unsynchronized version over six runs, two outcomes:
+ * the worst left one record in each file, 570 of the 572 written being in neither;
+ * the mildest left 1 of the 60 burst records. Each extra rotation carries away
+ * whatever file it fired on, records written milliseconds earlier included.
+ */
+describe("concurrent writes across the rotation boundary", () => {
+	const dir = `/tmp/a2a-audit-race-${process.pid}`;
+	const file = join(dir, "audit.log");
+	const rolled = `${file}.1`;
+	const env = { A2A_BRIDGE_AUDIT: file } as NodeJS.ProcessEnv;
+
+	// The cap in src/audit.ts, and the padding to sit just under it.
+	const MAX_LOG_BYTES = 512 * 1024;
+	const BURST = 60;
+
+	// ~1.15 KB per record: below the 120-char leaf cap so redaction leaves it alone,
+	// below the 1024-char args cut so nothing is truncated.
+	const fatter: Record<string, string> = {};
+	for (let k = 0; k < 10; k++) fatter[`f${k}`] = "y".repeat(110);
+
+	const primeLine = (id: string) =>
+		`${JSON.stringify({ ts: "0", id, sid: "prime", phase: "start", tool: "read", args: "p".repeat(940) })}\n`;
+
+	const idsOnDisk = () => {
+		const out = new Set<string>();
+		for (const p of [file, rolled]) {
+			if (!existsSync(p)) continue;
+			for (const line of readFileSync(p, "utf8").split("\n").filter(Boolean)) {
+				try {
+					out.add(JSON.parse(line).id as string);
+				} catch {
+					/* a torn line is its own failure; the count below catches it */
+				}
+			}
+		}
+		return out;
+	};
+
+	const sizes = () => [file, rolled].map((p) => (existsSync(p) ? String(statSync(p).size) : "none")).join("|");
+
+	test("one rotation, and every record written is still readable", async () => {
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(dir, { recursive: true });
+
+		let prime = "";
+		let primeCount = 0;
+		while (prime.length + primeLine(`prime-${primeCount}`).length < MAX_LOG_BYTES - 200) {
+			prime += primeLine(`prime-${primeCount++}`);
+		}
+		writeFileSync(file, prime);
+		const headroom = MAX_LOG_BYTES - statSync(file).size;
+		// The burst has to overflow the headroom, otherwise nothing rotates and the
+		// test proves only that an untouched log is fine.
+		expect(BURST * 1150).toBeGreaterThan(headroom);
+
+		for (let i = 0; i < BURST; i++) auditStart(`race-${i}`, "sid", "read", fatter, env);
+
+		// Appends are fire-and-forget, so wait for the two files to stop changing.
+		let last = "";
+		for (let i = 0; i < 1200; i++) {
+			await Bun.sleep(5);
+			const now = sizes();
+			if (now === last && now !== "none|none") break;
+			last = now;
+		}
+		await Bun.sleep(300);
+
+		const seen = idsOnDisk();
+		const missing = [
+			...Array.from({ length: primeCount }, (_, i) => `prime-${i}`),
+			...Array.from({ length: BURST }, (_, i) => `race-${i}`),
+		].filter((id) => !seen.has(id));
+
+		// Every record survives: the burst crosses the cap once, the previous
+		// generation lands in `.1`, and nothing overwrites it.
+		expect(missing.slice(0, 5)).toEqual([]);
+		expect(missing.length).toBe(0);
+
+		rmSync(dir, { recursive: true, force: true });
+	}, 120_000);
 });
