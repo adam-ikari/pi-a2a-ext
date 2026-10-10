@@ -59,9 +59,9 @@ const PAGE_DESCRIPTIONS = {
 	"protocol.md":
 		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /blob 的原始字节上传与它放弃的东西。",
 	"testing.md":
-		"核验矩阵：107 单测（含不起宿主也能量到的宿主交接那半条路径与入口那一层的端口生死）、35 项原始字节上传（含宿主 RSS 实测、写失败路径与会话归属）、35 项加固（含审计轮转与逐层脱敏）、28 项发布包与端到端、10 个端到端场景、审批边界判别。附插件发现与 HOME 的实测结论。",
+		"核验矩阵：107 单测、35 项原始字节上传、35 项加固、28 项发布包与端到端、10 个端到端场景，另有审批边界判别。顺手量的还有宿主 RSS、审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
 	"computer-use.md":
-		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行的是真工具而非模拟操作，目录是显式的而非猜的。",
+		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是宿主原生工具的实现，目录由 tools/list 一条条给出名字和参数。",
 };
 for (const [file, description] of Object.entries(PAGE_DESCRIPTIONS)) {
 	const target = join(CONTENT, file);
@@ -113,7 +113,7 @@ const changelog = readFileSync(join(REPO, "CHANGELOG.md"), "utf8")
 	.replaceAll("](docs/testing.md)", "](./testing.md)");
 writeFileSync(
 	join(CONTENT, "changelog.md"),
-	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的完整演进：POST /blob 的原始字节上传、端到端核验的恢复与推翻、安装方式的收敛，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
+	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的改动记录：POST /blob 为什么收原始字节、哪些端到端核验被推倒重测、安装方式怎么收到一条，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
 );
 
 // protocol.md: repo-relative links -> site form
@@ -134,8 +134,8 @@ layout: home
 
 hero:
   name: omp A2A Bridge
-  text: 让远程的 agent 操作你本地的设备
-  tagline: 扩展把本机跑着的这个 omp 开成一个 MCP 接口，远程 agent 指过来就能在这台机器上跑 adb、idf.py、串口工具。宿主不做模型推理——收请求、跑工具、回结果。
+  text: 把本机的工具开给远程的 agent
+  tagline: 扩展把本机跑着的这个 omp 开成一个 MCP 接口，远程 agent 指过来就能在这台机器上跑 adb、idf.py、串口工具。宿主不做模型推理：收请求、跑工具、回结果。
   actions:
     - theme: brand
       text: 接上远程 agent
@@ -145,17 +145,20 @@ hero:
       link: /protocol
 
 features:
-  - title: 远程能碰到什么
-    details: 宿主注册表原样透传，bash 在其中——adb、idf.py、烧录器都是本机上的命令。宿主挂载的 xd:// 设备走 read/write 的 path。
+  - title: 远程烧一块板子
+    details: adb、idf.py、串口工具、烧录器都是本机 PATH 上的命令。远程 agent 调 bash，执行落在本机 shell；装了 Android SDK 就调得到 adb，装了 ESP-IDF 就能 idf.py flash。
     link: /intro#设备
-  - title: 传固件
-    details: POST /blob 收原始字节，不 base64。实测 100 MB 一次请求传完，字节一致。上传专用，GET 会 405——理由在协议页。
+  - title: 驱动挂在宿主上的设备
+    details: 宿主挂出来的 xd://debug（DAP 调试器）、xd://lsp 这些设备不进工具目录，用 read/write 的 path 参数读写与执行。清单跟着宿主装了哪些扩展、接了什么设备走。
+    link: /intro#设备
+  - title: 把固件放上宿主机
+    details: POST /blob 收原始字节，不 base64。实测 100 MB 镜像一次请求传完，字节一致。只做上传，GET 一律 405，理由在协议页。
     link: /intro#传文件
   - title: 接上远程 agent
-    details: 宿主首次启动时广播桥地址并生成 token，复制进远程客户端的 mcp.json 即连通。跨机走 SSH 端口转发。
+    details: 宿主首次启动时广播桥地址并生成 token，复制进远程客户端的 mcp.json 就连上。跨机走 SSH 端口转发，桥默认只绑回环。
     link: /intro
   - title: 与 computer use 的区别
-    details: computer use 让模型看屏幕猜坐标去点按，本桥按名字调工具。前者操作像素，后者操作宿主已注册的工具——要推理的那一方也在不同地方。
+    details: computer use 让模型看屏幕猜坐标去点按，本桥发的是工具名加参数，执行落在宿主原生工具的实现上。要推理的那一方也不同：宿主不推理，推理全在调用方的模型里。
     link: /computer-use
   - title: 协议参考
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。

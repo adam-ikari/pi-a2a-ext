@@ -13,7 +13,7 @@
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 在磁盘上而非 tmpfs，攒多了会挤掉别的东西。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 六个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
@@ -30,7 +30,7 @@
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
-端到端这组**每次都先卸载再装**。原先是「已装就跳过」，那是个洞：git URL 装出来的是**实体拷贝**，冻结在装的那一刻，于是改坏工作区的 `src/bridge.ts` 之后端到端那 11 项全绿——它验的是那份旧拷贝。实测过：破坏工作区、旧版核验报 `PACKAGE OK`。现在每次重装，且断言插件目录**解析到工作区而非拷贝**，破坏工作区会如实变红并点名那个文件。
+端到端这组**每次都先卸载再装**。原先是「已装就跳过」，那是个洞：git URL 装出来的是**实体拷贝**，冻结在装的那一刻，于是改坏工作区的 `src/bridge.ts` 之后端到端那 11 项全绿——它验的是那份旧拷贝。实测过：破坏工作区、旧版核验报 `PACKAGE OK`。现在每次重装，且断言插件目录**解析到工作区，不是拷贝**，破坏工作区会如实变红并点名那个文件。
 
 装法用 `omp install .`（链接）而不是 README 那个 git URL（拷贝）：链接指向工作区，宿主加载的就是当前代码。**本地安装在这里是测试夹具，不是受支持的安装方式**——受支持的只有 git URL 一条，见 README。
 
@@ -72,7 +72,7 @@
 | 拒绝 | 5 | 无 token → 401；缺 `path` → 400；空 body → 400；`offset` 与现大小不符 → 409；`offset` 非整数 → 400 |
 | 仅 POST | 7 | `GET`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS /blob` 各 → 405；文件既没被读回也没被删掉 |
 | 其他 | 3 | 父目录不存在时自动创建；审计写入 `blob:write`；审计不含文件内容 |
-| 失败与边界 | 14 | 操作系统层写失败不报成功（写 `/dev/full`）；失败也进审计并记为 error；只有 token 没有会话头仍能写，审计里 `sid` 为 `null`；桥没签发过的会话头同样写得成，审计里也是 `null`，不记成那个自称的 id；桥签发过的会话头原样进审计；413 不碰已存在的文件；目标是目录时整条拒绝；`~` 展到宿主 HOME 而非调用方的；相对路径落在 agent 目录；同一文件两路并发追加各自完整不互相插字节；413 不进审计 |
+| 失败与边界 | 14 | 操作系统层写失败不报成功（写 `/dev/full`）；失败也进审计并记为 error；只有 token 没有会话头仍能写，审计里 `sid` 为 `null`；桥没签发过的会话头同样写得成，审计里也是 `null`，不记成那个自称的 id；桥签发过的会话头原样进审计；413 不碰已存在的文件；目标是目录时整条拒绝；`~` 展到宿主 HOME、不是调用方的；相对路径落在 agent 目录；同一文件两路并发追加各自完整不互相插字节；413 不进审计 |
 | 内存实测 | 2 | 测量期间的两次并发上传都被接受；这一轮的 100 MB 单请求仍返回 200 |
 
 「仅 POST」那组是补的。接 `/blob` 进 handler 时只测了 POST，其他动词落到哪个分支没人验——于是 `DELETE /blob` 落进了 blob 的处理流程，因为 body 为空返回 400，那个状态码在说谎（读起来像「上传格式不对」，实际是「这个端点没这个方法」）。**接一个新路由时，「哪些方法会落到这里」和「这个路由做什么」是同一个问题的两面。**
