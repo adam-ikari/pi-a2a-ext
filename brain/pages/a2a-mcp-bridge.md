@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-10T14:06:54"
+updated: "2026-10-10T17:12:00"
 ---
 
 <!-- compiled_truth -->
@@ -634,4 +634,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: brain update-truth
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T17:12:00
+  kind: decision
+  summary: "网站定位（2026-10-10）：站点以「用途」为先。首页 features 从『连上能干什么』讲起——烧板子（bash→adb/idf.py/烧录器）、驱动 xd:// 挂载设备、POST /blob 放固件、接上远程 agent，机制卡「远程能碰到什么」拆成场景卡；协议/测试两张导航卡保留。文案口径：数字、表格、代码块与仓库文档逐字节守恒，改动只落在句子层（sync.mjs 自有文案 + docs 进站页）；CHANGELOG 里带事实宾语的单次「而非」对照暂留，由作者裁决。"
+  source: "网站去 AI 味与首页改版（2026-10-10）"
   affects: [a2a-mcp-bridge]
