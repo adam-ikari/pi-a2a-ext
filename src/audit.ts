@@ -54,13 +54,29 @@ function serializeArgs(args: unknown): string {
 	}
 }
 
+/**
+ * Appends run one at a time, per process.
+ *
+ * `stat` → `rename` → `appendFile` is three steps and two calls in flight together
+ * both read a size over the cap. Without this chain the second rotation writes over
+ * the `.1` the first one just parked the previous generation in, and what vanishes is
+ * the record another call wrote milliseconds earlier — for `POST /blob` that is the
+ * whole trace, since that endpoint never goes through the host's approval gate.
+ * Still fire-and-forget for the caller: the line is handed to the chain and
+ * `appendLine` returns, and the chain never rejects, so one failed write cannot
+ * wedge the ones behind it.
+ */
+let queue: Promise<void> = Promise.resolve();
+
 function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
 	const file = auditLogPath(env);
-	(async () => {
-		const s = await stat(file).catch(() => null);
-		if (s && s.size + line.length > MAX_LOG_BYTES) await rename(file, `${file}.1`);
-		await appendFile(file, line, { mode: 0o600 });
-	})().catch(() => {});
+	queue = queue
+		.then(async () => {
+			const s = await stat(file).catch(() => null);
+			if (s && s.size + line.length > MAX_LOG_BYTES) await rename(file, `${file}.1`);
+			await appendFile(file, line, { mode: 0o600 });
+		})
+		.catch(() => {});
 }
 
 /**
