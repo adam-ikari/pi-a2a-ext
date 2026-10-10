@@ -17,6 +17,11 @@
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
 
+## 2026-10-09 — 测试页的序列停在第十六轮，首页卡片把 install 当纯打包
+
+- docs: `docs/testing.md` 那段 RSS 结论抄了协议页的逐轮序列，抄完停在第十六轮——协议页已记到第二十轮，它还少了四个并发数与后来的基线。改成只留区间（单个 −157 到 +171 MB，并发 −141 到 +168 MB）与负值的来处，逐轮序列与近六轮基线归协议页那张表维护，不抄第二份
+- docs: 首页「测试与核验」卡片把 `test:install` 当成不起宿主的纯打包检查——它有端到端那半程之后，六个核验全都起宿主（`docs/testing.md` 的统一前置段一直写着六个）。卡片改为六个，点名发布包那一个装回去跑通
+
 ## 2026-10-09 — 宿主又超前两天，pin 同步至 18.8.6
 
 - chore: pi-* pin 与 lockfile 同步至 **18.8.6**（第七次复发）。宿主 omp 有 `startup.checkUpdate`（默认开），会自己升级，节奏不由本仓库定；10-07 同步到 18.6.3 推完，10-09 宿主与 node_modules 都到了 18.8.6，版本守卫两条红（实装 ≠ pin、宿主 ≠ pin）。谁在改本仓库的 node_modules 仍是未知机制，不假装知道。代码与文档引的宿主源码位置逐条对 18.8.6 复核过，全部原位未动：三个 `getAllTools` 接线点（`runtime-init.ts:126`、`extension-ui-controller.ts:199/427`、`acp-agent.ts:2581`）、`session_start` 的两个发点（`runtime-init.ts:212`、`extension-ui-controller.ts:320-329`）、`AgentRef.session` 的哨兵注释（`agent-registry.ts:69`，`Null exactly when parked/aborted`）——文档与测试注释里的行号不用改

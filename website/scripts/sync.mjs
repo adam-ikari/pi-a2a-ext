@@ -161,7 +161,7 @@ features:
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 测试与核验
-    details: 单测之外，五个核验起真实的宿主 omp 跑完整流程，另有一个核验发布包自包含。审批核验给出 VERDICT A/B/C。
+    details: 单测之外，六个核验起真实的宿主 omp 跑完整流程，发布包那一个装回去跑通才算过。审批核验给出 VERDICT A/B/C。
     link: /testing
 ---
 `;
