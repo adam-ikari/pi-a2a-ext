@@ -13,7 +13,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
-import { auditLogPath } from "../src/audit.ts";
+import { auditLogPath, auditStart } from "../src/audit.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 
 const savedEnv = { ...process.env };
@@ -25,6 +25,19 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+	// Appends are fire-and-forget, but they run one at a time on a single chain, so a
+	// sentinel enqueued here lands only after everything already queued has. Poll for
+	// it rather than guessing a sleep: the alternative is the directory going away
+	// under an in-flight record, which costs that record and prints a warning that
+	// reads like an audit failure when it is only teardown.
+	const drain = `host-call-drain-${process.pid}`;
+	auditStart(drain, null, "drain", {});
+	const deadline = Date.now() + 3000;
+	while (Date.now() < deadline) {
+		const text = await readFile(auditLogPath(), "utf8").catch(() => "");
+		if (text.includes(drain)) break;
+		await Bun.sleep(10);
+	}
 	if (savedEnv.A2A_BRIDGE_AUDIT === undefined) delete process.env.A2A_BRIDGE_AUDIT;
 	else process.env.A2A_BRIDGE_AUDIT = savedEnv.A2A_BRIDGE_AUDIT;
 	await rm(auditDir, { recursive: true, force: true });

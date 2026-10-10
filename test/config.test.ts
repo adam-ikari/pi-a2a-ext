@@ -11,7 +11,7 @@ let env: NodeJS.ProcessEnv;
 
 const VALID: BridgeConfig = {
 	port: 1234,
-	token: "unit-test-token",
+	token: "unit-test-token-0123456789abcdef",
 	host: "127.0.0.1",
 };
 
@@ -77,6 +77,23 @@ describe("loadConfig", () => {
 	test("host of the wrong type -> fail-closed", async () => {
 		await writeFile(file, JSON.stringify({ ...VALID, host: "" }));
 		await expect(loadConfig(env)).rejects.toThrow(`field 'host' must be a non-empty string`);
+	});
+
+	test("a token too short to be a secret -> fail-closed, not healed", async () => {
+		// The token is the only gate on an endpoint that writes anywhere the host can.
+		// Healing it would be worse than refusing: it silently replaces a token
+		// somebody chose and leaves the remote's mcp.json failing with no reason given.
+		await writeFile(file, JSON.stringify({ ...VALID, token: "letmein" }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'token' must be at least 32 characters`);
+		expect((JSON.parse(await readFile(file, "utf8")) as { token: string }).token).toBe("letmein");
+	});
+
+	test("a token with whitespace -> fail-closed", async () => {
+		// `extractBearer` hands back everything after `Bearer ` verbatim, so a stored
+		// token with a space in it can only ever be matched by a header that carries
+		// that space too. Nobody types that on purpose; a paste does it.
+		await writeFile(file, JSON.stringify({ ...VALID, token: "unit test token 0123456789abcdef" }));
+		await expect(loadConfig(env)).rejects.toThrow(`field 'token' must be at least 32 characters`);
 	});
 
 	test("missing token -> regenerated and persisted (stable across restarts)", async () => {

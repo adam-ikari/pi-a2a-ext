@@ -18,7 +18,7 @@ const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
 const payload = `SMOKE-PAYLOAD-${Date.now()}\nsecond line\n`;
 const dataFile = join(tmp, "payload.txt");
-const TOKEN = "smoke-token";
+const TOKEN = "smoke-token-0123456789abcdef-bridge";
 
 linkExtension(agentDir);
 writeFileSync(dataFile, payload);

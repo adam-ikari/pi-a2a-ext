@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditDone, auditStart } from "../src/audit.ts";
+import { auditDone, auditStart, auditWriteFailures } from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -143,21 +143,32 @@ describe("audit never loses a call", () => {
 	});
 
 	test("an unwritable log path does not reach the caller or the process", async () => {
-		// The `appendLine` chain ends in `.catch(() => {})` for a reason: an audit
+		// The `appendLine` chain ends in a `.catch` for a reason: an audit
 		// failure that surfaces as an unhandled rejection noise-floods the host's own
-		// error log, which is a worse outcome than a missing line.
+		// error log, which is a worse outcome than a missing line. Swallowed is not
+		// silent, though — the log is the only trace of a `POST /blob`, so a bridge that
+		// cannot write it has to say so once and keep a count.
 		const dead = { A2A_BRIDGE_AUDIT: join(dir, "no-such-dir", "audit.log") } as NodeJS.ProcessEnv;
 		const unhandled: unknown[] = [];
 		const collect = (reason: unknown) => unhandled.push(reason);
 		process.on("unhandledRejection", collect);
+		const before = auditWriteFailures();
+		const printed: string[] = [];
+		const realError = console.error;
+		console.error = (...a: unknown[]) => printed.push(a.map(String).join(" "));
 		try {
 			expect(() => auditStart("dead-1", "sid", "read", { path: "/etc/hostname" }, dead)).not.toThrow();
 			expect(() => auditDone("dead-1", "sid", "read", { path: "/etc/hostname" }, true, dead)).not.toThrow();
 			await Bun.sleep(50); // the rejected appends settle in the background
 		} finally {
+			console.error = realError;
 			process.off("unhandledRejection", collect);
 		}
 		expect(unhandled).toEqual([]);
+		expect(auditWriteFailures()).toBeGreaterThanOrEqual(before + 2);
+		expect(
+			printed.some((l) => l.includes("audit record not written") && l.includes(dead.A2A_BRIDGE_AUDIT as string)),
+		).toBe(true);
 	});
 });
 

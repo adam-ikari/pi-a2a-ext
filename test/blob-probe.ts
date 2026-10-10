@@ -214,6 +214,23 @@ try {
 		`http=${rNoSid.status}`,
 	);
 
+	// A session id the bridge never issued. `sid` is the audit's attribution field —
+	// the one that separates one client's calls from another's under a shared token
+	// (src/audit.ts) — so a value the caller invents cannot be allowed to name
+	// somebody else's session. It still writes: the token is the gate, and refusing
+	// here would make the bridge decide who may upload. It just records no caller.
+	const forged = "00000000-dead-beef-0000-000000000000";
+	const rForged = await fetch(`${base}/blob?path=${encodeURIComponent(at("forged-sid.bin"))}`, {
+		method: "POST",
+		headers: { authorization: `Bearer ${token}`, "mcp-session-id": forged },
+		body: "forged",
+	});
+	check(
+		"a session id the bridge never minted still writes, and is not attributed",
+		rForged.status === 200 && readFileSync(at("forged-sid.bin"), "utf8") === "forged",
+		`http=${rForged.status}`,
+	);
+
 	// Over the cap on a path that ALREADY has bytes. The 413 comes from Bun before
 	// the handler runs, so the existing file must be exactly what it was and the
 	// audit must not mention this path at all: a refusal that leaves a half-written
@@ -283,6 +300,11 @@ try {
 		"no error record for /dev/full",
 	);
 	check("the sid-less write is audited, and says the caller is unknown", audited(["no-sid.bin", '"sid":null'], false));
+	check(
+		"a session id from outside the bridge is audited as no caller, not as the claim",
+		audited(["forged-sid.bin", '"sid":null'], false),
+	);
+	check("a session id this bridge issued is audited verbatim", audited(["raw.bin", `"sid":"${SID}"`], false));
 	check("the directory refusal is audited as an error", audited([`\\"${scratch}\\"`], true));
 	check("the 413 was never audited", !log2.includes("pre-existing.bin"), "a refused upload left a record");
 
