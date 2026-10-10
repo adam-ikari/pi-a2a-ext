@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-09T12:06:46"
+updated: "2026-10-10T14:06:54"
 ---
 
 <!-- compiled_truth -->
@@ -46,11 +46,11 @@ Exposure semantics (2026-09-23 review): the catalog is the session tool REGISTRY
 Static Bearer token, 32 random bytes base64url, generated on first start, persisted 0600 in ~/.omp/agent/a2a-bridge.json together with port/host/deny. Constant-time compare. /a2a rotate regenerates. No OAuth/TLS in v1 (loopback default; SSH forwarding documented).
 
 ## Q6 Config & audit (decided 2026-09-23; audit redesigned two-phase 2026-09-24)
-Config validation is fail-closed: a present-but-malformed field (port/deny/host/denyMCPTools) aborts extension startup with a named error instead of running with a wrong exposure surface. Only `token` self-heals — regenerated AND persisted, so it stays stable across restarts. Config writes are 0600 at creation (writeFile mode), closing the pre-chmod window. External edits to a2a-bridge.json apply on next host restart; only `/a2a rotate` is live.
-Every remote tools/call writes TWO JSONL audit records paired by id — auditStart at dispatch ({ts,id,sid,phase:"start",tool,args truncated to 1KB}) and auditDone on completion ({ts,id,sid,phase:"done",tool,isError,args}) — to <agentDir>/a2a-bridge.log: 0600, rotates to .1 past 512KB, $A2A_BRIDGE_AUDIT overrides the path, audit failures never affect the call. Design reversal 2026-09-24 (supersedes the completion-only amendment): a call that never settles (prompt tier in no-UI mode) leaves start-without-done, so hangs are visible in the log. sid (the Mcp-Session-Id) was added to both records 2026-09-24, closing the attribution gap: under one shared token a call is attributable to its client session (asserted in unit tests and the hardening probe).
+Config validation is fail-closed: a present-but-malformed field (port/deny/host/denyMCPTools) aborts extension startup with a named error instead of running with a wrong exposure surface. `token` self-healing is limited to the field being ABSENT or not a string (amended 2026-10-10): a present string shorter than 32 characters or containing whitespace is refused like any malformed field — the bridge never swaps a token somebody typed for one it generated, because the remote mcp.json would break with no explanation anywhere; the floor (MIN_TOKEN_CHARS) sits below generateToken's own 43-character output, so it catches placeholders, not copied secrets. Config writes are 0600 at creation (writeFile mode), closing the pre-chmod window. External edits to a2a-bridge.json apply on next host restart; only `/a2a rotate` is live.
+Every remote tools/call writes TWO JSONL audit records paired by id — auditStart at dispatch ({ts,id,sid,phase:"start",tool,args truncated to 1KB}) and auditDone on completion ({ts,id,sid,phase:"done",tool,isError,args}) — to <agentDir>/a2a-bridge.log: 0600, rotates to .1 past 512KB, $A2A_BRIDGE_AUDIT overrides the path, audit failures never affect the call. Design reversal 2026-09-24 (supersedes the completion-only amendment): a call that never settles (prompt tier in no-UI mode) leaves start-without-done, so hangs are visible in the log. sid (the Mcp-Session-Id) was added to both records 2026-09-24, closing the attribution gap: under one shared token a call is attributable to its client session (asserted in unit tests and the hardening probe). POST /blob's sid counts only when this bridge issued that session id and it is still live; anything else records null (2026-10-10) — a caller-chosen value is a claim, not attribution, and rejecting instead would make the bridge decide who may upload. Three 2026-10-10 additions: audit write failures are swallowed but no longer silent (first failure per log path prints to host stderr, then every 100th, counter auditWriteFailures() — an unwritable log looks exactly like a bridge that was never called); the blob:write record lands BEFORE the response reads the file's size back, since evidence an endpoint depends on as its only trace may not sit behind a throwable response-decoration step (a failed read then costs the `size` field, not the record, and the response stays 200 because 5xx would send a chunking client into a double-append retry); and unauthorized attempts are deliberately never written to the audit file — rotation is the only lever pre-auth traffic could use to age real records out of the one-generation window — they go to host stderr instead, first one and every 50th.
 
 ## Q7 Session & protocol (decided 2026-09-23)
-Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — missing returns 400, unknown or idle past 24h returns 404, and every hit refreshes the idle TTL (header omission is not a bypass). The map is bounded at 64 sessions with least-recently-seen eviction, because abandoned clients never return to be purged. Auth runs before every state-touching branch, so an unauthenticated DELETE cannot terminate sessions. initialize always answers protocolVersion 2025-11-25 instead of echoing whatever the client asked for, and jsonrpc must be exactly "2.0" (else 400). A configured port already in use falls back to an ephemeral port WITH a warning, since remote mcp.json pins the old port.
+Mandatory sessions: every non-initialize message must carry Mcp-Session-Id — missing returns 400, unknown or idle past 24h returns 404, and every hit refreshes the idle TTL (header omission is not a bypass). The map is bounded at 64 sessions with least-recently-seen eviction, because abandoned clients never return to be purged. Auth runs before every state-touching branch, so an unauthenticated DELETE cannot terminate sessions. initialize always answers protocolVersion 2025-11-25 instead of echoing whatever the client asked for, and jsonrpc must be exactly "2.0" (else 400). A configured port already in use falls back to an ephemeral port WITH a warning, since remote mcp.json pins the old port. POST /blob consults the same map for attribution only (2026-10-10): an id this bridge never issued does not reject the upload, it just records as `sid: null` in the audit; a live issued id refreshes the idle timer like an MCP-path hit.
 
 ## Notable verified facts
 - MCP SDK not installed anywhere: bridge hand-writes JSON-RPC on Bun.serve, zero deps.
@@ -142,6 +142,8 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 代价（如实）：100MB 文件不走 MCP 通道（走 SSH/`scp`，README 早已这么建议）；原子落盘（`.tmp` + `rename` + 0600）没有了，远程写文件用宿主的 `edit`/`bash`；远程会看到 `hidden` 工具——这是「不过滤」的必然结果。
 
 **教训：桥自带工具绕过宿主审批门，所以不得不自带沙箱——这是一个决定的两个后果，要一起删。** 只删其中一个，会得到一个比原来更糟的中间态。
+
+
 ## Timeline
 
 - time: 2026-09-10T09:16:34
@@ -590,4 +592,46 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "版本漂移第七次复发：宿主 omp 有 startup.checkUpdate（默认开），10-07 同步至 18.6.3 推完，10-09 宿主与 node_modules 已到 18.8.6，pin 仍 18.6.3，bun test 两项红（installed != pin、host != pin）。pin + lockfile 同步至 18.8.6。node_modules 被谁改仍是未知机制（前六次同一条），不假装知道。协议的宿主源码引用逐条对 18.8.6 复核未动：runtime-init.ts:126 与 acp-agent.ts:2581（getAllTools: () => session.getAllToolInfos()）、runtime-init.ts:212、extension-ui-controller.ts:320-329、agent-registry.ts:69（Null exactly when parked/aborted）。18.8.6 全量回归：tsc 0 / 105 单测 / biome 干净；六探针全绿（SMOKE 21 工具、HARDEN 35、BLOB 32、SCENARIOS 54 steps 0 failed、审批 VERDICT B 挂起 90001ms 无副作用审计 start=1 done=0、PACKAGE OK）。协议页内存表按第二十轮重落：空闲 485MB、单个 8MB 安顿 +21MB、两个并发安顿 +51MB、峰值 +22/+51（本轮峰值与安顿几乎相等，三种关系都出现过）；test/rss-18.8.6.json 替换 18.6.3 那份。教训同前：这条不变量的保质期由宿主的升级节奏定，不由修复定。"
   source: "bun test 红两项 + omp --version 18.8.6 + 六探针复跑"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:03:31
+  kind: decision
+  summary: "证据记录必须先于「响应装饰」步骤落盘（2026-10-10 代码评审确立，适用面超出 /blob）。src/blob.ts 原先在写入成功后先 stat 读回文件大小、再写 auditBlob；那一次 stat 在 close() 之后的窗口里可以抛（文件被 unlink、父目录失可寻），于是出现「500 + 字节已在盘上 + 日志无痕」——对一个以审计为唯一痕迹的端点，这是最坏的组合。现在 auditBlob 先落盘，读尺寸失败只让响应少一个 size 字段，状态照常 200。响应也不能反过来报 500：分块客户端的语义是 5xx 重试，而 /blob 只会追加，重试就是同一段字节写两遍。取舍的通用形式：凡是「这条记录是某类操作唯一痕迹」的场合，痕迹的写入不许排在任何可能失败的锦上添花之后。该修复没有先红后绿的测试——竞态窗口摆不出来，docs/testing.md 按「第三条没有」明说，不冒充变异核验过"
+  source: "src/blob.ts · docs/testing.md 失败与边界组"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:04:17
+  kind: decision
+  summary: "「归属」与「声明」分家（2026-10-10 评审确立）：进审计的 sid 只能是桥自己签发过、还在空闲窗口内的会话 id，外部来历的值一律记 null，而不是拒绝请求。/blob 原先把 mcp-session-id 头照抄进 auditBlob——审计里唯一的归因字段由调用方自报，任何持 token 的人都能把写入登记到别人的会话名下或编一个 id；MCP 路径逐条验这个头，同一个字段在两条路径上不是一个意思。不选拒绝的理由与 AGENTS.md 一脉：拒绝等于桥在决定谁可以上传，这是协议没给过它的位置——只有 token、没有会话头的请求本来就是受理的。签发过的 id 经 /blob 会刷新空闲计时，与 MCP 路径同一语义。核验三条：伪造头照样写得成且审计为 null；桥签发的头原样进审计；无头写为 null。变异（换回照抄）只红归属那条"
+  source: "src/server.ts issuedSession · test/blob-probe.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:04:39
+  kind: decision
+  summary: "鉴权失败的信号走 stderr，不进审计文件（2026-10-10 评审确立）。401 原先在日志里一条痕迹都没有，运维分不清「没人来」与「来的人全敲错门」；现在进程级计数 deniedAttempts，第一次与其后每 50 次打一行宿主 stderr。刻意不落审计的理由是一条攻击面算术：审计文件是 512KB 轮转、只保留一代的滚动窗口，而轮转不认鉴权状态——给鉴权前的流量写记录，等于把「冲掉真实记录的唯一杠杆」交给每一个正在猜 token 的人，他们不需要猜中，只需要灌量。信号强度按这个约束定：stderr 的告警不占磁盘窗口，节流到 1/50 不刷屏。同族决定：这类「用共享状态给失败留痕」的设计，先问留痕本身会不会成为新的写入口"
+  source: "src/server.ts · README Troubleshooting"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:04:39
+  kind: decision
+  summary: "token 下限 fail-closed，不自愈（2026-10-10 评审确立，改 Q6 的自愈边界）。配置里存在但短于 32 字符或含空白的 token 与 port/host 同罪：拒绝启动并报字段名；自愈只剩字段缺失或根本不是字符串这一种。原实现把「非法 token」一律当缺失处理，重写并写回——对 3 字符的占位符这不是宽容，是给一个「能写宿主可写的一切」的端点留了扇没人知道开着的门；反过来若自愈继续，谁手写短 token 就会被桥悄悄换成随机值，远程 mcp.json 对不上号且没有任何地方说明原因。MIN_TOKEN_CHARS=32 压在 generateToken 产出（43 字符）之下，拦的是占位符，不是从别处抄来的密钥，这是它敢做硬拒绝的原因。代价写明：把一个本来能起的桥按死，操作者要去读报错——换到的是「交出去的 token 一定交出去」"
+  source: "src/config.ts · test/config.test.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:04:56
+  kind: decision
+  summary: "审计写失败「吞但不哑」（2026-10-10 评审确立，Q6 的补充）。不变式「日志写失败不影响调用」原样保留——rejection 冒到宿主进程或卡死队列都在这条断言的红名单里；但每个日志路径第一次写失败打一行宿主 stderr（audit record not written to <路径>），此后每满 100 次再打，计数经 auditWriteFailures() 可读。理由：写不成的日志与从没被调用过的桥看起来一模一样，而本项目的安全论证建立在「/blob 的唯一痕迹在这份文件里」上，论证的前提坏了必须说出来。按路径而非按进程记「首次」： 让一个进程可以对着多个路径，全局只报第一次会让第二个路径哑掉。变异（换回空 catch）只红新断言那一条"
+  source: "src/audit.ts · test/audit.test.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:04:56
+  kind: evidence
+  summary: "单测套件的 teardown 与全局审计队列相吃（2026-10-10 排查记录）：test/host-call.test.ts 的 afterAll 原先直接删审计目录，把别的文件此刻还在途的记录一并抹掉——「审计写失败要可见」那条断言在全套件里红、单跑绿，红的是别人的 teardown。修法：afterAll 先向队列投一条哨兵记录并轮询等它落盘（上限 3 秒）再删。可泛化的形状：进程级共享资源（这里是一条 promise 队列加一个路径）在做完断言前必须排空再销毁；跨文件的全局单例测试，先红的那条往往不在改它的人的文件里"
+  source: test/host-call.test.ts afterAll
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-10T14:06:54
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: brain update-truth
   affects: [a2a-mcp-bridge]
