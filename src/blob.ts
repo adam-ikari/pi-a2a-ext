@@ -29,6 +29,15 @@
  * documented as such in README under "Security and boundaries". The alternative
  * is no raw-byte path at all.
  *
+ * One consequence of resolving paths here is that the bridge is itself under the
+ * root it resolves against: `a2a-bridge.json` and `a2a-bridge.log` live in the
+ * agent directory, and so does every relative `path`. Nothing here can *rewrite*
+ * either file — writes are append-only and an offset has to equal the current size
+ * — but appending junk to the config makes the next `loadConfig` throw and the
+ * bridge refuse to come up, and flooding the log drives rotations that drop a
+ * retained generation. Both are the bridge's own startup and evidence, not new
+ * reach: whoever can do this already holds the token.
+ *
  * ## What is kept
  *
  * Auditing. Every write is recorded through the same `audit.ts` pair as a
@@ -48,7 +57,12 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { auditBlob } from "./audit.ts";
 
 export interface BlobDeps {
-	/** Session id of the caller, for the audit record. */
+	/**
+	 * Session id of the caller, for the audit record — and only ever one this bridge
+	 * actually issued. The audit says `sid` is what attributes a shared token's calls
+	 * to a client (src/audit.ts), so a header value nobody here minted is a claim, not
+	 * attribution; src/server.ts hands that case over as `null`.
+	 */
 	sid: string | null;
 }
 
@@ -178,13 +192,26 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 		await handle.close();
 	}
 
+	// Audited BEFORE the size is read back, because that read is a step that can
+	// throw on a request whose write already succeeded — the file can be unlinked
+	// or its parent made unsearchable in the gap after `close()`. This endpoint's
+	// only trace is the audit line, so the record cannot sit behind an unrelated
+	// failure: `500` with the bytes on disk and nothing in the log is precisely the
+	// outcome this module exists to avoid.
+	auditBlob(deps.sid, path, at, buf.length, null);
+
 	// The size is read off the file rather than computed, so the response cannot
 	// report a total the file disagrees with. Concurrent uploads to the same path
-	// make this a snapshot of a moving file, not a lock: see docs/protocol.md.
-	const finalSize = (await stat(target)).size;
-
-	// Audited after the write, so the record carries the real byte count. Args are
-	// metadata only — see the header.
-	auditBlob(deps.sid, path, at, buf.length, null);
-	return { status: 200, body: { written: buf.length, offset: at, size: finalSize, path } };
+	// make that read a snapshot of a moving file, not a lock: see docs/protocol.md.
+	// If the read fails, `size` is left out rather than guessed — the write did
+	// happen, so answering 500 here would send a chunking client into a retry that
+	// appends the same bytes twice. `written` and `offset` are still the truth.
+	const finalSize = await stat(target).then(
+		(s) => s.size,
+		() => null,
+	);
+	const body: Record<string, unknown> = { written: buf.length, offset: at };
+	if (finalSize !== null) body.size = finalSize;
+	body.path = path;
+	return { status: 200, body };
 }
