@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-09T02:36:05"
+updated: "2026-10-09T12:06:46"
 ---
 
 <!-- compiled_truth -->
@@ -585,3 +585,9 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "目录、暴露门、执行统一读 Main 会话的 getAllToolInfos()（src/bridge.ts 的 servedTools()），常规宿主里它与原先那份 pi.getAllTools() 逐字相同（同一个函数的两个接线点）；AgentRef.session 为 null（parked/aborted 到端口释放之间）退回入口那份 pi，不报空注册表。取舍理由与 AGENTS.md 一致：桥不该有第二份名单，连「工具集合」这份名单也不该有——它应当就是宿主执行时解析的那一份"
   affects: [src/bridge.ts, test/host-call.test.ts]
+
+- time: 2026-10-09T12:06:46
+  kind: decision
+  summary: "版本漂移第七次复发：宿主 omp 有 startup.checkUpdate（默认开），10-07 同步至 18.6.3 推完，10-09 宿主与 node_modules 已到 18.8.6，pin 仍 18.6.3，bun test 两项红（installed != pin、host != pin）。pin + lockfile 同步至 18.8.6。node_modules 被谁改仍是未知机制（前六次同一条），不假装知道。协议的宿主源码引用逐条对 18.8.6 复核未动：runtime-init.ts:126 与 acp-agent.ts:2581（getAllTools: () => session.getAllToolInfos()）、runtime-init.ts:212、extension-ui-controller.ts:320-329、agent-registry.ts:69（Null exactly when parked/aborted）。18.8.6 全量回归：tsc 0 / 105 单测 / biome 干净；六探针全绿（SMOKE 21 工具、HARDEN 35、BLOB 32、SCENARIOS 54 steps 0 failed、审批 VERDICT B 挂起 90001ms 无副作用审计 start=1 done=0、PACKAGE OK）。协议页内存表按第二十轮重落：空闲 485MB、单个 8MB 安顿 +21MB、两个并发安顿 +51MB、峰值 +22/+51（本轮峰值与安顿几乎相等，三种关系都出现过）；test/rss-18.8.6.json 替换 18.6.3 那份。教训同前：这条不变量的保质期由宿主的升级节奏定，不由修复定。"
+  source: "bun test 红两项 + omp --version 18.8.6 + 六探针复跑"
+  affects: [a2a-mcp-bridge]
