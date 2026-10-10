@@ -14,9 +14,16 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
  */
 export interface BridgeConfig {
 	port: number; // 0 = random
-	token: string; // base64url 32B
+	token: string; // base64url 32B; loadConfig rejects anything shorter than MIN_TOKEN_CHARS
 	host: string; // default "127.0.0.1"
 }
+
+/**
+ * Floor on a configured token. `generateToken` produces 43 characters (32 random
+ * bytes, base64url), so the floor sits well below its own output: it is there to
+ * catch a placeholder somebody typed, not to police a secret from a vault.
+ */
+export const MIN_TOKEN_CHARS = 32;
 
 export function generateToken(): string {
 	return randomBytes(32).toString("base64url");
@@ -39,9 +46,11 @@ function fieldError(file: string, field: string, expect: string): Error {
  * Load ~/.omp/agent/a2a-bridge.json (or $A2A_BRIDGE_CONFIG).
  *
  * Fail-closed: a present-but-malformed field throws, so the extension refuses
- * to start rather than coming up on an unexpected endpoint. The one exception
- * is `token`: a missing/invalid token is regenerated and persisted, because a
- * bridge without a stable token cannot function at all.
+ * to start rather than coming up on an unexpected endpoint. `token` is
+ * malformed when it is too short or has whitespace, and it is refused on the
+ * same terms. The one exception is a token that is *absent* (or not a string at
+ * all): it is regenerated and persisted, because a bridge without a stable token
+ * cannot function at all.
  */
 export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig> {
 	const file = configPath(env);
@@ -80,6 +89,16 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 	}
 
 	if (typeof p.token === "string" && p.token.length > 0) {
+		// Same rule as `port` and `host` above: a field that is present but cannot be
+		// what it claims is refused rather than worked around. This one is the only
+		// gate on an endpoint that writes anywhere the host process can, so a 3-
+		// character token is not a weak default to forgive — it is the door left open.
+		// Healing is deliberately NOT the answer here: regenerating would overwrite a
+		// token somebody chose, and the remote's mcp.json would break with no message
+		// and nothing in the log to explain it.
+		if (p.token.length < MIN_TOKEN_CHARS || /\s/.test(p.token)) {
+			throw fieldError(file, "token", `at least ${MIN_TOKEN_CHARS} characters, no whitespace`);
+		}
 		cfg.token = p.token;
 	} else {
 		// Heal: persist the regenerated token now, so the remote side does not
