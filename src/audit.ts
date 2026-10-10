@@ -68,6 +68,27 @@ function serializeArgs(args: unknown): string {
  */
 let queue: Promise<void> = Promise.resolve();
 
+/** Audit appends that did not land, since the process started. See below. */
+let failedWrites = 0;
+
+/**
+ * Log paths whose failure has already been announced. The line is per path,
+ * because a path is the thing the operator can act on, and `$A2A_BRIDGE_AUDIT`
+ * means one process can be pointed at more than one: a global "only the first
+ * failure ever" would let the second path fail in silence.
+ */
+const warnedPaths = new Set<string>();
+
+/**
+ * How many audit appends have failed since the process started. A log that cannot
+ * be written looks exactly like a bridge that was never called, so the difference
+ * has to be checkable — by the operator through the line `appendLine` prints, and
+ * by a test through this.
+ */
+export function auditWriteFailures(): number {
+	return failedWrites;
+}
+
 function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
 	const file = auditLogPath(env);
 	queue = queue
@@ -76,7 +97,21 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
 			if (s && s.size + line.length > MAX_LOG_BYTES) await rename(file, `${file}.1`);
 			await appendFile(file, line, { mode: 0o600 });
 		})
-		.catch(() => {});
+		.catch((e) => {
+			// Still swallowed: a rejection per line noise-floods the host's error log,
+			// and auditing must not become a way for the log to break the call
+			// (test/audit.test.ts pins this). Swallowed is not silent — the bridge's own
+			// safety argument is that this file is the only trace of a `POST /blob`, and
+			// an unwritable path would hollow that out with nothing to show. So the first
+			// failure on a path says so, then every hundredth failure overall, and the
+			// count stays readable through `auditWriteFailures()`.
+			failedWrites++;
+			if (!warnedPaths.has(file) || failedWrites % 100 === 0) {
+				warnedPaths.add(file);
+				const why = (e as Error)?.message ?? String(e);
+				console.error(`[a2a-bridge] audit record not written to ${file} (${why})`);
+			}
+		});
 }
 
 /**
