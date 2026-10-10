@@ -35,6 +35,15 @@ export interface BridgeDeps {
  */
 const MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
 
+/**
+ * Unauthorized attempts since the process started. Module-level rather than
+ * per-endpoint: the operator's question is "is someone guessing the token on this
+ * machine", and a bridge that rebinds (Main parks and resumes) must not get to
+ * restart the count. See the 401 branch in the handler for why this is a log line
+ * and never an audit record.
+ */
+let deniedAttempts = 0;
+
 const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 1 day idle expiry
 /** Upper bound on tracked sessions; the least-recently-seen entry is evicted first. */
@@ -67,6 +76,31 @@ export async function startServer(
 	const sessions = new Map<string, number>();
 	const now: () => number = deps.now ?? Date.now;
 
+	/**
+	 * The session id this bridge actually issued, or `null` when the header does not
+	 * name one that is still live. A hit refreshes the timestamp, so the TTL tracks
+	 * idle time exactly as the MCP path below does.
+	 *
+	 * `POST /blob` needs the lookup for a different reason than the MCP path. There a
+	 * stale id is an error; here it must stay a `null`, because the value is the
+	 * audit record's `sid` — and `sid` is what makes a shared token's writes
+	 * attributable to a client (src/audit.ts). Handed through on trust it is the
+	 * caller's own claim, so any token holder could file a write under someone else's
+	 * session. Rejecting instead would make the bridge decide who may upload, which is
+	 * a position the protocol never gave it: a token-only request is already accepted
+	 * and records `sid: null`.
+	 */
+	function issuedSession(raw: string | null): string | null {
+		if (raw === null || raw === "") return null;
+		const ts = sessions.get(raw);
+		if (ts === undefined || now() - ts > SESSION_TTL_MS) {
+			if (ts !== undefined) sessions.delete(raw);
+			return null;
+		}
+		sessions.set(raw, now());
+		return raw;
+	}
+
 	/** Evict the least-recently-seen session so the map stays bounded. */
 	function evictOldest(): void {
 		let oldestSid: string | null = null;
@@ -88,6 +122,17 @@ export async function startServer(
 			// Auth precedes every state-touching branch: an unauthenticated
 			// DELETE must not be able to terminate another client's session.
 			if (!authorize({ token: cfg.token }, req.headers)) {
+				// Unauthorised attempts stay out of the audit file on purpose. That log is
+				// the only trace `POST /blob` leaves and it holds one rotated generation, so
+				// a pre-auth writer would only have to pump volume past the cap to drop real
+				// records with it. The operator still needs to know someone is knocking: this
+				// goes to the host's log, once and then every 50th.
+				deniedAttempts++;
+				if (deniedAttempts === 1 || deniedAttempts % 50 === 0) {
+					console.warn(
+						`[a2a-bridge] ${deniedAttempts} unauthorized attempt(s) — check the token in the remote mcp.json`,
+					);
+				}
 				return json(401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "unauthorized" } });
 			}
 
@@ -101,7 +146,7 @@ export async function startServer(
 			// endpoint is upload-only by design, so say so with 405 like every other
 			// unsupported verb.
 			if (new URL(req.url).pathname === "/blob" && req.method === "POST") {
-				const blobDeps: BlobDeps = { sid: req.headers.get("mcp-session-id") };
+				const blobDeps: BlobDeps = { sid: issuedSession(req.headers.get("mcp-session-id")) };
 				const r = await handleBlob(req, new URL(req.url), blobDeps);
 				return r.body === undefined ? new Response(null, { status: r.status }) : json(r.status, r.body);
 			}
