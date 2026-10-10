@@ -115,13 +115,13 @@ The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with
 | Field | Meaning |
 | --- | --- |
 | `port` | `0` = random port; set a number to pin it |
-| `token` | Bearer token, generated on first start |
+| `token` | Bearer token, generated on first start (43 characters); a hand-written one under 32 characters is refused |
 | `host` | Listen address, default `127.0.0.1` (a warning is added if you change it to `0.0.0.0`) |
 Only those three. **There is no tool allow/deny list and no file sandbox** — the bridge makes no permission decision of its own, so adding such fields to the config has no effect (unknown fields are ignored).
 
 `A2A_BRIDGE_CONFIG` overrides the config path; `A2A_BRIDGE_AUDIT` overrides the audit log path.
 
-Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `host` not a non-empty string) makes the extension refuse to start and report an error. The one exception is `token`: when missing or invalid it is regenerated and **written back to the config**, so it stays stable across restarts.
+Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `host` not a non-empty string, `token` shorter than 32 characters or containing whitespace) makes the extension refuse to start and report an error. The one exception is a `token` that is **absent** (or not a string at all): it is regenerated and **written back to the config**, so it stays stable across restarts. A token somebody typed is never replaced by one the bridge chose — that would break the remote `mcp.json` with no explanation anywhere. The floor sits below what `generateToken` emits (43 characters), so it catches a placeholder, not a secret copied from elsewhere.
 
 Config edits take effect on the **next host restart**; to change only the token at runtime, use `/a2a rotate` (immediate, and the old token stops working at once).
 
@@ -180,14 +180,17 @@ curl -X POST --data-binary @firmware.bin \
   "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
 ```
 
-One request carries up to 128 MB — measured: a 100 MB image went through in a single
-call, byte-identical, in 0.4 s. No `offset` means append; with `offset` it must equal
+One request carries up to 128 MB — measured every probe round: a 100 MB image goes
+through in a single call, byte-identical. No `offset` means append; with `offset` it must equal
 the file's current size, or 409. Larger files chunk, still as raw bytes. The full
 contract is in [docs/protocol.md](docs/protocol.md).
 
 Mind the memory: Bun buffers the body before the handler sees it, so the cost is
-**per in-flight request**. Measured host RSS: 368 MB idle, 624 MB after one 100 MB
-upload, 846 MB with two concurrent. Keep concurrency down.
+**per in-flight request** — ten concurrent 100 MB uploads are ten 100 MB buffers, and
+that arithmetic needs no measurement. Host RSS around uploads is measured each probe
+round and the current table lives in [docs/protocol.md](docs/protocol.md); the numbers
+move with Bun's allocator, so treat them as scale, not as a budget. Keep concurrency
+down.
 
 **Download does not work.** Three host-side limits stack, and any one alone is enough:
 
@@ -234,10 +237,10 @@ The listing is decided by the host at runtime — it depends on which extensions
 - **The bridge makes no permission decision**: `tools/list` is the host's `Main` session registry (`getAllToolInfos()`), passed through verbatim with no filtering. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
 - **Execution goes through the host's native tools**: `tools/call` routes to `getToolByName().execute()` on the host's `Main` session with the real `session.settings` and `ExtensionContext ui` injected, so the host's approval gate (`ExtensionToolWrapper`) applies as usual. The bridge implements no approval logic of its own.
 - **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list`; aliases (such as `xd://bash`) and unregistered names are refused, and a refusal does not distinguish "filtered" from "nonexistent" (so it does not leak whether a name exists).
-- **`POST /blob` is the exception, and it does not pass the host approval gate.** It takes raw bytes (skipping base64) and writes them directly, resolving the path itself — so it can write **anywhere the host process can write, with no root and no allowlist**. That is deliberate: an extension cannot raise an approval request of its own (`ExtensionAPI` only offers `on("tool_approval_requested", …)`, which is the host asking and the extension answering), and the one way to write through the gate is a `tools/call` — the very encoding `/blob` exists to avoid. Auditing still happens, tagged `tool: "blob:write"` with `path`/`offset`/`bytes` in args and never the file contents. See [docs/protocol.md](docs/protocol.md).
+- **`POST /blob` is the exception, and it does not pass the host approval gate.** It takes raw bytes (skipping base64) and writes them directly, resolving the path itself — so it can write **anywhere the host process can write, with no root and no allowlist**. That is deliberate: an extension cannot raise an approval request of its own (`ExtensionAPI` only offers `on("tool_approval_requested", …)`, which is the host asking and the extension answering), and the one way to write through the gate is a `tools/call` — the very encoding `/blob` exists to avoid. Auditing still happens, tagged `tool: "blob:write"` with `path`/`offset`/`bytes` in args and never the file contents. One consequence of resolving paths here is that the bridge's own two files sit under the root it resolves against — `a2a-bridge.json` and `a2a-bridge.log` are both in the agent directory, and so is every relative `path`. Neither can be rewritten (writes append, and an explicit `offset` has to equal the current size), but appending junk to the config makes the next `loadConfig` throw and the bridge refuse to start, and pumping volume into the log drives the rotations that drop a retained generation. Startup and evidence, not new reach: whoever can do this already holds the token. See [docs/protocol.md](docs/protocol.md).
 - Loopback-only by default; if you really do expose it, the firewall is your responsibility.
 - **Sessions are mandatory**: every message except `initialize` must carry `Mcp-Session-Id` (missing → 400, unknown or idle past 24h → 404). At most 64 sessions are tracked, with the least-recently-seen evicted beyond that; every hit refreshes the idle timer.
-- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. The `id` is a UUID the bridge generates for pairing; the caller's JSON-RPC id is not written, so the log cannot be searched by it. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads — at any nesting depth, not just the top levels: the host's `edit` args put the file body at `args.edits[0].oldText`, and a redactor that stops two levels deep writes it out. Nesting past 32 levels is replaced by `<max-depth>` rather than walked. This is the bridge's own log: the host session still sees the args it was handed, and its transcript is the host's to keep. Records reach the disk through one queue per process, because `stat`-then-rotate-then-append is three steps: two calls in flight together both read a size past the cap and both rotate, and the second `rename` overwrites the `.1` the first one just filled. Measured on the unqueued version over six runs: the worst left one record in each of the two files, 570 of the 572 records the test had put on disk being in neither. Audit write failures never affect the call.
+- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. The `id` is a UUID the bridge generates for pairing; the caller's JSON-RPC id is not written, so the log cannot be searched by it. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads — at any nesting depth, not just the top levels: the host's `edit` args put the file body at `args.edits[0].oldText`, and a redactor that stops two levels deep writes it out. Nesting past 32 levels is replaced by `<max-depth>` rather than walked. This is the bridge's own log: the host session still sees the args it was handed, and its transcript is the host's to keep. Records reach the disk through one queue per process, because `stat`-then-rotate-then-append is three steps: two calls in flight together both read a size past the cap and both rotate, and the second `rename` overwrites the `.1` the first one just filled. Measured on the unqueued version over six runs: the worst left one record in each of the two files, 570 of the 572 records the test had put on disk being in neither. Audit write failures never affect the call, and they do not pass unnoticed either: the first failure for a log path prints `[a2a-bridge] audit record not written to <path> (<cause>)` to the host's stderr, then every hundredth failure, because a log that cannot be written looks exactly like a bridge that was never called. A `blob:write` record reaches the disk before the response reads the file's size back, so a failed read after a landed write costs a field in the response rather than the trace. `POST /blob` fills `sid` from sessions this bridge issued only; a header from outside is recorded as `null`, because a caller-chosen value lets any token holder file a write under somebody else's session. Unauthorized attempts write nothing here at all — they go to the host's stderr, first one and then every 50th — since handing pre-auth traffic the one lever that ages real records out of a rolling window costs more than the missing line is worth.
 - **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI). Two catches on reading that signal, both measured: rotation can split one call's pair across `.1` and the current file, so pair by `id` in both files; and only ONE generation is retained, because the next rotation overwrites `.1` — the evidence of a hung call ages out of the log after enough later traffic. Read it while it is still there.
 - If the configured port is busy, the bridge falls back to an ephemeral port and warns (update the port in the remote `mcp.json`).
 
@@ -263,7 +266,9 @@ Design trade-off (read this before adding a feature):
 
 ## Troubleshooting
 
-- **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2a rotate`.
+- **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2a rotate`. The host's stderr says `[a2a-bridge] N unauthorized attempt(s)` for the first failure and every 50th after it; those attempts stay out of the audit log on purpose (see the audit bullet under [Security and boundaries](#security-and-boundaries)).
+- **The bridge refuses to start with `field 'token' must be at least 32 characters`**: somebody wrote a short token into `a2a-bridge.json`. Put a real secret there (or delete the field and let the bridge generate and persist one); the bridge will not swap out a token it was handed.
+- **No audit records, and no call failed**: the log path is unwritable — `$A2A_BRIDGE_AUDIT` pointing into a directory that does not exist, a permission error, or a full disk. Host stderr carries `[a2a-bridge] audit record not written to <path> (<cause>)`. Fixing the path does not recover what was already lost.
 - **400 `missing mcp-session-id` / 404 `unknown session`**: every message except `initialize` needs the session header. Sessions are in-memory in the host process — they all die when the host restarts and are reclaimed after 24h idle; run `initialize` again for a new session (a well-behaved MCP client library does this automatically).
 - **Cannot connect / wrong port**: if the configured port is busy at host startup, the bridge falls back to a random port and warns in the notification bar — use the actual port shown there or in `/a2a` to update `mcp.json`.
 - **A call never returns**: the host has no interactive UI and the tool's approval is `prompt` (see [Approval](#approval)) — the command does not execute, but neither does the call return; the caller must impose its own timeout, and the audit log shows a `start` with no `done` for that call (see the audit-log bullet under [Security and boundaries](#security-and-boundaries)).
@@ -278,10 +283,10 @@ bun install
 
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
-bun test              # unit tests: test/*.test.ts (105: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
+bun test              # unit tests: test/*.test.ts (107: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 35 items (needs a local omp)
-bun run test:blob      # POST /blob raw-byte upload, 32 items (needs a local omp)
+bun run test:blob      # POST /blob raw-byte upload, 35 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 10 narratives / 54 steps, ~45s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 28 items (needs a local omp)
