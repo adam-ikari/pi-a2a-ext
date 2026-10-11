@@ -17,6 +17,17 @@
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
 
+## 2026-10-11 — 单测补掉分派层与 `auditBlob`，pin 跟到 18.8.7
+
+- chore: `@oh-my-pi/pi-ai` 与 `pi-coding-agent` 的 pin 从 18.8.6 跟到 18.8.7——宿主 omp 在这两天自己升了版，`test/versions.test.ts` 那条「pin 必须等于宿主」的守卫先红。守卫拦下的正是该拦的：18.8.7 上重跑六个宿主核验全绿之后，pin 与 lockfile 一起落
+- test: 单测 107 → 117（8 → 9 文件）。`audit.ts` 的 `auditBlob` 记录形状两条：成功上传是一条 `done`（`tool: blob:write`，args 只有 path/offset/bytes 元数据，没有 start/done 双相可言，协议页拿这个不对称跟 `tools/call` 对照过），失败记录 `bytes: 0`、`error` 切在 200 字符。新建 `test/blob-route.test.ts`（8 项）覆盖 `src/server.ts` 的分派层：401 在读完 body 之前、`DELETE /blob` 走 405 且这条不能杀 MCP 会话、被拒的形状（缺 path、空 body、`offset=abc`）不写文件也不写日志、`issuedSession` 四态（签发过的原样进审计、伪造与缺失记 `null`、TTL 内刷新过期后不再归属）、目录路径 → 500 且照样落一条 `isError: true`、offset 不符 409 且原文件一个字节没动
+- 变异核验四项，各红各名：`issuedSession` 换回照抄请求头，红归属与 TTL 那三条；删掉 `server.ts` 里 `DELETE /blob` 的 405 分支，红「会话杀不掉」那条——它掉进通用 handler 会销毁 MCP 会话；`auditBlob` 的 `error.slice(0, 200)` 摘掉，红失败形状那条；`offset !== size` 直接放行，红 409 那条（半截追加同时把字节断言打红）。还原后 `git diff src/` 为空，117/117
+- coverage: `src/server.ts` 93% → 100%，`src/audit.ts` 76% → 100%，`src/blob.ts` 5% → 78.67%，`src/bridge.ts` 99% 没动。blob 剩下的 `162-165`（在途 409）、`173-182`（短写）、`184`（写失败 catch）留给 `test:blob`——要在单测里碰它们得换实现（注入 fd、或换一块真满的盘），那条路把宿主专有的语义搬进单测，不值得
+- 推翻一条旧立场：此前「刻意不补单测」的理由是分派层与 blob「要的是真字节进文件系统，宿主探针已经在跑」。测下来站不住——单测起真桥、写 `/tmp` 里的真小文件，验的是接线和记录形状，这两样 `test:blob` 的 35 项给不了单测那样的定位（它红的时候不知道是字节还是归因）；字节保真那半程仍归探针，两边的分工现在写在 `docs/testing.md`。上一条的坑复用了一次：断言「日志里没有」之前先投哨兵排空队列（`host-call.test.ts` 的 afterAll 教训第二次派用场）
+- docs: 协议页内存表按第二十三轮重落（宿主 18.8.7 首轮：空闲 549 MB，单个 8 MB 安顿 −57 MB，两个并发安顿 −56 MB，峰值 −1 / −32——四个读数都低于基线，负值出在取样位置，原因表里照写）；近六轮基线 497、483、485、468、488、549 MB，跨度 81 MB；100 MB 单请求本轮耗时没被探针日志尾巴截到，写死的秒数删掉不补。`docs/testing.md` 的 RSS 结论段同步（二十三轮、三次为负），覆盖率段按新数重标
+- 计数同步：单测 117（README 中英、站点摘要、`docs/testing.md` 总览）
+- 回归：`lint` / `tsc` / `bun test` 117/117；六个宿主核验在 18.8.7 上全绿（`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 35 项、`SCENARIOS 54 steps, 0 failed`、审批探针 `VERDICT: B` 挂起 90001ms、`PACKAGE OK`）
+
 ## 2026-10-10 — 网站文案去 AI 味，首页卡片改成从用途讲
 
 - docs: 站点自有文案（`sync.mjs` 里的 hero、六张卡片、页面 description）扫了一遍 AI 腔：computer-use 摘要里两处 `而非` 拆成实事（执行落在宿主原生工具的实现上、目录由 `tools/list` 给出名字和参数），changelog 摘要的「完整演进」「核验的恢复与推翻」「安装方式的收敛」动词化，testing 摘要拆掉三个连环括号（计数 107/35/35/28/10 原样），`即连通` → `就连上`，hero `操作你本地的设备` → `把本机的工具开给远程的 agent`。卡片里 `前者操作像素，后者操作宿主已注册的工具——要推理的那一方也在不同地方` 这种对仗口号换成两句可核验的陈述

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditDone, auditStart, auditWriteFailures } from "../src/audit.ts";
+import { auditBlob, auditDone, auditStart, auditWriteFailures } from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -169,6 +169,61 @@ describe("audit never loses a call", () => {
 		expect(
 			printed.some((l) => l.includes("audit record not written") && l.includes(dead.A2A_BRIDGE_AUDIT as string)),
 		).toBe(true);
+	});
+});
+
+describe("audit record shape for a blob upload", () => {
+	const dir = `/tmp/a2a-audit-blob-${process.pid}`;
+	const file = join(dir, "audit.log");
+	const env = { A2A_BRIDGE_AUDIT: file } as NodeJS.ProcessEnv;
+
+	const recordHolding = async (needle: string) => {
+		for (let i = 0; i < 300; i++) {
+			if (existsSync(file)) {
+				const hit = readFileSync(file, "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.find((l) => l.includes(needle));
+				if (hit) return JSON.parse(hit) as Record<string, unknown>;
+			}
+			await Bun.sleep(10);
+		}
+		throw new Error(`no audit record holding ${needle}`);
+	};
+
+	beforeAll(() => {
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(dir, { recursive: true });
+	});
+
+	afterAll(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("a successful upload is ONE done line carrying metadata, not a start/done pair", async () => {
+		// The blob endpoint never waits on a UI, so there is no half-settled state to
+		// pair; docs/protocol.md sells this asymmetry against tools/call. If a second
+		// phase ever shows up here, the protocol page is lying somewhere.
+		auditBlob("sid-1", "fw.bin", 0, 16, null, env);
+		const rec = await recordHolding("fw.bin");
+		expect(rec).toMatchObject({ phase: "done", tool: "blob:write", sid: "sid-1", isError: false });
+		expect("error" in rec).toBe(false);
+		expect(rec.args).toBeTypeOf("string");
+		expect(String(rec.args)).toContain('"path":"fw.bin"');
+		expect(String(rec.args)).toContain('"offset":0');
+		expect(String(rec.args)).toContain('"bytes":16');
+	});
+
+	test("a failed upload records bytes 0 and an error cut at 200 chars", async () => {
+		// The failure must be greppable as a failure and the message bounded: the
+		// OS hands back multi-kB EACCES strings with absolute host paths in them,
+		// and this log is read by whoever holds the token, not only by the host.
+		auditBlob(null, "bad.bin", 8, 0, "E".repeat(300), env);
+		const rec = await recordHolding("bad.bin");
+		expect(rec.isError).toBe(true);
+		expect(rec.sid).toBeNull();
+		expect(String(rec.error)).toHaveLength(200);
+		expect(String(rec.args)).toContain('"bytes":0');
 	});
 });
 

@@ -1,0 +1,15 @@
+{
+	"hostVersion": "18.8.7",
+	"measuredAt": "2026-10-11",
+	"probeBodyMB": 8,
+	"hundredMBStatus": 200,
+	"idleMB": 549,
+	"peakOneUploadMB": 549,
+	"peakTwoConcurrentMB": 517,
+	"settledAfterOneMB": 493,
+	"settledAfterTwoMB": 493,
+	"peakDeltaOneMB": -1,
+	"peakDeltaTwoMB": -32,
+	"settledDeltaOneMB": -57,
+	"settledDeltaTwoMB": -56
+}

@@ -283,7 +283,7 @@ bun install
 
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
-bun test              # unit tests: test/*.test.ts (107: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard)
+bun test              # unit tests: test/*.test.ts (117: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/blob dispatch)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 35 items (needs a local omp)
 bun run test:blob      # POST /blob raw-byte upload, 35 items (needs a local omp)
