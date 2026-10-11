@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-10T17:12:00"
+updated: "2026-10-11T03:30:03"
 ---
 
 <!-- compiled_truth -->
@@ -640,4 +640,19 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "网站定位（2026-10-10）：站点以「用途」为先。首页 features 从『连上能干什么』讲起——烧板子（bash→adb/idf.py/烧录器）、驱动 xd:// 挂载设备、POST /blob 放固件、接上远程 agent，机制卡「远程能碰到什么」拆成场景卡；协议/测试两张导航卡保留。文案口径：数字、表格、代码块与仓库文档逐字节守恒，改动只落在句子层（sync.mjs 自有文案 + docs 进站页）；CHANGELOG 里带事实宾语的单次「而非」对照暂留，由作者裁决。"
   source: "网站去 AI 味与首页改版（2026-10-10）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-11T03:29:45
+  kind: reversal
+  summary: "Unit-vs-probe stance overturned (2026-10-11): the earlier 「刻意不补单测」 ruling for server.ts's /blob dispatch + issuedSession and audit.auditBlob claimed those areas need real bytes and belong only to test:blob. Wrong on both counts: unit tests can start the real bridge against tiny real files in /tmp and pin WIRING and record SHAPE (auth-before-payload ordering, DELETE 405 not killing the MCP session, sid attribution states incl. TTL refresh via injected clock, one-done-line blob:write shape, error cut at 200, bytes:0 on failure) — things the 35-item probe cannot localize when red. Byte fidelity stays with the probe. Result: +10 tests (107->117, new test/blob-route.test.ts 8 + auditBlob shape 2), server.ts 93->100%, audit.ts 76->100%, blob.ts 5->78.67% (remaining 162-165 in-flight 409, 173-182 short write, 184 write-failure catch stay probe territory — covering them in units would require injecting an fd or a real full disk, i.e. moving host-only semantics into units). Four mutations, each red under its own test names; src restored to zero diff."
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-11T03:29:45
+  kind: decision
+  summary: "Sentinel drain before absence assertions, second recorded use (2026-10-11): audit appends ride one fire-and-forget process-level chain, so any test asserting a record is NOT in the log must first enqueue a sentinel auditStart(marker) and poll until it lands, then read. First established via test/host-call.test.ts afterAll teardown (2026-10-10); reused in test/blob-route.test.ts for the rejected-shapes 'writes nothing, logs nothing' checks."
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-11T03:30:03
+  kind: note
+  summary: "Version state 2026-10-11: host omp auto-updated to 18.8.7; test/versions.test.ts guard fired red, pins + bun.lock synced 18.8.6 -> 18.8.7. Full regression green on 18.8.7: tsc, biome, unit 117/117, six host probes (SMOKE, HARDEN 35, BLOB 35, SCENARIOS 54/0, approval VERDICT B hang 90001ms, PACKAGE). RSS round 23 measured on 18.8.7: idle 549 MB, all four 8 MB deltas negative (settled -57/-56, peaks -1/-32) — baseline-sampling artifact, same explanation as prior negatives; protocol.md table refreshed from test/rss-18.8.7.json."
   affects: [a2a-mcp-bridge]
